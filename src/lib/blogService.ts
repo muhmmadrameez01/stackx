@@ -183,7 +183,7 @@ export async function getAllCategories(): Promise<BlogCategoryItem[]> {
   try {
     const categories = await db.category.findMany();
     if (categories.length > 0) {
-      return categories.map(c => ({
+      return categories.map((c: any) => ({
         id: c.id,
         name: c.name,
         slug: c.slug,
@@ -210,7 +210,7 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
     });
 
     if (posts.length > 0) {
-      let filtered = posts.map(p => ({
+      let filtered = posts.map((p: any) => ({
         ...p,
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
@@ -218,7 +218,7 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
 
       if (query) {
         const q = query.toLowerCase();
-        filtered = filtered.filter(p => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
+        filtered = filtered.filter((p: any) => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
       }
       return filtered;
     }
@@ -226,13 +226,13 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
     // Database fallback
   }
 
-  let posts = inMemoryPosts.filter(p => p.published);
+  let posts = inMemoryPosts.filter((p: BlogPostItem) => p.published);
   if (categorySlug) {
-    posts = posts.filter(p => p.category?.slug === categorySlug);
+    posts = posts.filter((p: BlogPostItem) => p.category?.slug === categorySlug);
   }
   if (query) {
     const q = query.toLowerCase();
-    posts = posts.filter(p => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
+    posts = posts.filter((p: BlogPostItem) => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
   }
   return posts;
 }
@@ -261,7 +261,7 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
     // Database fallback
   }
 
-  const found = inMemoryPosts.find(p => p.slug === slug);
+  const found = inMemoryPosts.find((p: BlogPostItem) => p.slug === slug);
   if (found) {
     found.views += 1;
     return found;
@@ -302,7 +302,7 @@ export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt'
     };
   } catch (err) {
     // Memory fallback
-    const category = SAMPLE_CATEGORIES.find(c => c.id === data.categoryId) || null;
+    const category = SAMPLE_CATEGORIES.find((c: BlogCategoryItem) => c.id === data.categoryId) || null;
     const newPost: BlogPostItem = {
       ...data,
       id: newId,
@@ -344,7 +344,7 @@ export async function updateBlogPost(id: string, data: Partial<BlogPostItem>): P
       updatedAt: updated.updatedAt.toISOString(),
     };
   } catch (err) {
-    const idx = inMemoryPosts.findIndex(p => p.id === id);
+    const idx = inMemoryPosts.findIndex((p: BlogPostItem) => p.id === id);
     if (idx !== -1) {
       inMemoryPosts[idx] = { ...inMemoryPosts[idx], ...data, updatedAt: new Date().toISOString() };
       return inMemoryPosts[idx];
@@ -358,7 +358,7 @@ export async function deleteBlogPost(id: string): Promise<boolean> {
     await db.blogPost.delete({ where: { id } });
     return true;
   } catch (err) {
-    const idx = inMemoryPosts.findIndex(p => p.id === id);
+    const idx = inMemoryPosts.findIndex((p: BlogPostItem) => p.id === id);
     if (idx !== -1) {
       inMemoryPosts.splice(idx, 1);
       return true;
