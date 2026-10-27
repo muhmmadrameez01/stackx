@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
 import ReactCrop, { type Crop, type PixelCrop, centerCrop, makeAspectCrop } from 'react-image-crop';
-import 'react-image-crop/dist/ReactCrop.css';
 import { useDropzone } from 'react-dropzone';
 import { UploadCloud, Crop as CropIcon, Download, X, Image as ImageIcon } from 'lucide-react';
 
