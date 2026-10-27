@@ -1,0 +1,48 @@
+datasource db {
+  provider = "mysql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model BlogPost {
+  id              String    @id @default(cuid())
+  title           String
+  slug            String    @unique
+  summary         String    @db.Text
+  content         String    @db.Text
+  coverImage      String?
+  published       Boolean   @default(true)
+  featured        Boolean   @default(false)
+  views           Int       @default(0)
+  readingTime     Int       @default(3)
+  metaTitle       String?
+  metaDescription String?   @db.Text
+  keywords        String?   @db.Text
+  canonicalUrl    String?
+  schemaType      String    @default("BlogPosting")
+  authorName      String    @default("Stackx Team")
+  categoryId      String?
+  category        Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([published])
+  @@index([categoryId])
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  slug        String     @unique
+  description String?
+  posts       BlogPost[]
+}
+
+model Tag {
+  id   String @id @default(cuid())
+  name String @unique
+  slug String @unique
+}
