@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { CheckCircle2, Download, RotateCcw, Archive, Sparkles } from 'lucide-react';
 import { downloadFile, downloadFilesAsZip } from '../services/pdfService';
+import { AdBanner } from './AdBanner';
 
 import type { ToolId } from '../types';
 
@@ -156,6 +157,9 @@ export const SuccessView: React.FC<SuccessViewProps> = ({
           </button>
         )}
       </div>
+
+      {/* High-Converting AdSense Placement */}
+      <AdBanner placement="toolResultBanner" className="max-w-xl" />
 
       {/* Reset / Convert Another File */}
       <button

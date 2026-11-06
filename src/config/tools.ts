@@ -236,7 +236,7 @@ export const TOOLS: ToolDefinition[] = [
     fullDescription: 'Convert Microsoft Excel spreadsheets into clean PDF documents.',
     category: 'convert-to',
     iconName: 'Table',
-    accept: '.xls,.xlsx',
+    accept: '.xls,.xlsx,.csv',
     multiple: false
   },
   {
@@ -256,7 +256,7 @@ export const TOOLS: ToolDefinition[] = [
     fullDescription: 'Paste raw HTML content or website links to render and capture PDF files.',
     category: 'convert-to',
     iconName: 'Code',
-    accept: '*',
+    accept: '.html,.htm,text/html,*',
     multiple: false
   },
 

@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "publisherId": "",
+  "autoAds": true,
+  "testMode": true,
+  "slots": {
+    "headerBanner": "",
+    "toolResultBanner": "",
+    "toolBottomBanner": "",
+    "blogSidebarBanner": ""
+  },
+  "adsTxt": ""
+}
+

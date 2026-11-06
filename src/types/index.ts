@@ -142,3 +142,43 @@ export interface PDFAnnotation {
   isOriginalTextEdit?: boolean;
   isUnmodifiedOriginal?: boolean;
 }
+
+export interface AdSenseSlots {
+  headerBanner: string;
+  toolResultBanner: string;
+  toolBottomBanner: string;
+  blogSidebarBanner: string;
+}
+
+export interface AdSenseConfig {
+  enabled: boolean;
+  publisherId: string;
+  autoAds: boolean;
+  testMode: boolean;
+  slots: AdSenseSlots;
+  adsTxt: string;
+}
+
+export interface AdSenseAnalytics {
+  earningsToday: number;
+  earningsYesterday: number;
+  earningsLast7Days: number;
+  earningsLast28Days: number;
+  impressionsToday: number;
+  clicksToday: number;
+  pageRpm: number;
+  ctr: number;
+  dailyTrend: {
+    date: string;
+    revenue: number;
+    clicks: number;
+    impressions: number;
+  }[];
+  placementsBreakdown: {
+    name: string;
+    impressions: number;
+    clicks: number;
+    revenue: number;
+    percentage: number;
+  }[];
+}

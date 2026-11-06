@@ -41,7 +41,7 @@ function EditorForm() {
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('tools726_admin_secret');
+    const saved = localStorage.getItem('stackx_admin_secret') || localStorage.getItem('tools726_admin_secret') || 'Allah@726';
     if (saved) setSecretKey(saved);
 
     if (editId) {

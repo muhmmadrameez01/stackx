@@ -2,6 +2,10 @@ import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import { createWorker } from 'tesseract.js';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import * as XLSX from 'xlsx';
+import mammoth from 'mammoth';
+import { encryptPDF } from '@pdfsmaller/pdf-encrypt';
 import type { WatermarkOptions, PageNumberOptions, PDFPageMeta, PDFAnnotation } from '../types';
 
 // Set up PDF.js Global Worker
@@ -499,195 +503,39 @@ export async function addPageNumbers(file: File, options: PageNumberOptions): Pr
 }
 
 /**
- * Protect PDF with Password using raw PDF manipulation.
- * Since pdf-lib doesn't support encryption natively, we write the raw
- * /Encrypt dictionary and transform the file bytes ourselves using
- * the Standard Security Handler (V=1, R=2, 40-bit RC4) for maximum
- * reader compatibility.
+ * Protect PDF with Password using standard AES-256 / RC4 encryption.
+ * Encrypts document streams and sets user/owner password security.
  */
 export async function protectPDF(file: File, userPass: string, ownerPass: string): Promise<Uint8Array> {
   const srcBuf = await file.arrayBuffer();
   const srcBytes = new Uint8Array(srcBuf);
 
-  // ── Helpers ──────────────────────────────────────────────
-  function md5(data: Uint8Array): Uint8Array {
-    // Minimal MD5 (RFC 1321) — pure JS, no deps
-    const S = [
-      7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,
-      5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
-      4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,
-      6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21,
-    ];
-    const K = new Uint32Array(64);
-    for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0;
-    const padLen = (64 - ((data.length + 9) % 64)) % 64;
-    const buf = new Uint8Array(data.length + 1 + padLen + 8);
-    buf.set(data); buf[data.length] = 0x80;
-    const bits = data.length * 8;
-    const dv = new DataView(buf.buffer);
-    dv.setUint32(buf.length - 8, bits >>> 0, true);
-    dv.setUint32(buf.length - 4, (bits / 0x100000000) >>> 0, true);
-    let a0 = 0x67452301, b0 = 0xEFCDAB89, c0 = 0x98BADCFE, d0 = 0x10325476;
-    for (let off = 0; off < buf.length; off += 64) {
-      const M = new Uint32Array(16);
-      for (let j = 0; j < 16; j++) M[j] = dv.getUint32(off + j * 4, true);
-      let A = a0, B = b0, C = c0, D = d0;
-      for (let i = 0; i < 64; i++) {
-        let F: number, g: number;
-        if (i < 16) { F = (B & C) | (~B & D); g = i; }
-        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
-        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
-        else { F = C ^ (B | ~D); g = (7 * i) % 16; }
-        F = (F + A + K[i] + M[g]) >>> 0;
-        A = D; D = C; C = B; B = (B + ((F << S[i]) | (F >>> (32 - S[i])))) >>> 0;
-      }
-      a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
-    }
-    const res = new Uint8Array(16);
-    const rdv = new DataView(res.buffer);
-    rdv.setUint32(0, a0, true); rdv.setUint32(4, b0, true);
-    rdv.setUint32(8, c0, true); rdv.setUint32(12, d0, true);
-    return res;
-  }
-
-  function rc4(key: Uint8Array, data: Uint8Array): Uint8Array {
-    const S = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) S[i] = i;
-    let j = 0;
-    for (let i = 0; i < 256; i++) {
-      j = (j + S[i] + key[i % key.length]) & 0xFF;
-      [S[i], S[j]] = [S[j], S[i]];
-    }
-    const out = new Uint8Array(data.length);
-    let x = 0; j = 0;
-    for (let k = 0; k < data.length; k++) {
-      x = (x + 1) & 0xFF;
-      j = (j + S[x]) & 0xFF;
-      [S[x], S[j]] = [S[j], S[x]];
-      out[k] = data[k] ^ S[(S[x] + S[j]) & 0xFF];
-    }
-    return out;
-  }
-
-  // PDF password padding (Table 3.18 in PDF spec)
-  const PAD = new Uint8Array([
-    0x28,0xBF,0x4E,0x5E,0x4D,0x75,0x8A,0x41,0x64,0x00,0x4E,0x56,0xFF,0xFA,0x01,0x08,
-    0x2E,0x2E,0x00,0xB6,0xD0,0x68,0x3E,0x80,0x2F,0x0C,0xA9,0xFE,0x64,0x53,0x69,0x7A,
-  ]);
-
-  function padPassword(pass: string): Uint8Array {
-    const p = new Uint8Array(32);
-    const enc = new TextEncoder();
-    const bytes = enc.encode(pass);
-    for (let i = 0; i < 32; i++) p[i] = i < bytes.length ? bytes[i] : PAD[i - bytes.length];
-    return p;
-  }
-
-  // Generate a random 16-byte file ID
-  const fileId = new Uint8Array(16);
-  crypto.getRandomValues(fileId);
-
-  const P = -4; // permissions: no permissions (print only)
-  const keyLen = 5; // 40-bit RC4
-
-  // Algorithm 3.2: compute encryption key
-  function computeEncKey(userPassStr: string): Uint8Array {
-    const paddedUser = padPassword(userPassStr);
-    const ownerValue = computeOwnerValue();
-    const combined = new Uint8Array(paddedUser.length + ownerValue.length + 4 + fileId.length);
-    let off = 0;
-    combined.set(paddedUser, off); off += paddedUser.length;
-    combined.set(ownerValue, off); off += ownerValue.length;
-    combined[off++] = P & 0xFF;
-    combined[off++] = (P >> 8) & 0xFF;
-    combined[off++] = (P >> 16) & 0xFF;
-    combined[off++] = (P >> 24) & 0xFF;
-    combined.set(fileId, off);
-    const hash = md5(combined);
-    return hash.slice(0, keyLen);
-  }
-
-  // Algorithm 3.3: compute O value
-  function computeOwnerValue(): Uint8Array {
-    const paddedOwner = padPassword(ownerPass || userPass);
-    const hash = md5(paddedOwner);
-    const key = hash.slice(0, keyLen);
-    const paddedUser = padPassword(userPass);
-    return rc4(key, paddedUser);
-  }
-
-  // Algorithm 3.4: compute U value
-  function computeUserValue(encKey: Uint8Array): Uint8Array {
-    return rc4(encKey, PAD);
-  }
-
-  const encKey = computeEncKey(userPass);
-  const OValue = computeOwnerValue();
-  const UValue = computeUserValue(encKey);
-
-  // Now use pdf-lib to load and re-save (to normalize the PDF), then inject encryption
+  // Normalize document with pdf-lib first to ensure clean streams and valid trailer
   const pdfDoc = await PDFDocument.load(srcBytes, { ignoreEncryption: true });
-  const savedBytes = await pdfDoc.save();
+  const normalizedBytes = await pdfDoc.save();
 
-  // Convert to string for text-based manipulation
-  const decoder = new TextDecoder('latin1');
-  let pdfStr = decoder.decode(savedBytes);
-
-  // Find the trailer
-  const trailerIdx = pdfStr.lastIndexOf('trailer');
-  if (trailerIdx === -1) {
-    // If no trailer (xref stream based), just return the unencrypted version
-    // as a fallback - the PDF is still valid
-    return savedBytes;
+  try {
+    return await encryptPDF(normalizedBytes, userPass, {
+      ownerPassword: ownerPass || userPass,
+      algorithm: 'AES-256',
+      allowPrinting: true,
+      allowCopying: false,
+      allowModifying: false,
+    });
+  } catch (err) {
+    console.warn('AES-256 encryption unavailable, falling back to RC4:', err);
+    return await encryptPDF(normalizedBytes, userPass, {
+      ownerPassword: ownerPass || userPass,
+      algorithm: 'RC4',
+      allowPrinting: true,
+      allowCopying: false,
+      allowModifying: false,
+    });
   }
-
-  // Build the Encrypt dictionary as an indirect object
-  function toHexString(bytes: Uint8Array): string {
-    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  // Find the highest object number
-  const objPattern = /(\d+)\s+\d+\s+obj/g;
-  let maxObj = 0;
-  let match;
-  while ((match = objPattern.exec(pdfStr)) !== null) {
-    const n = parseInt(match[1], 10);
-    if (n > maxObj) maxObj = n;
-  }
-  const encObjNum = maxObj + 1;
-
-  const encryptDict = `${encObjNum} 0 obj\n<<\n/Type /Encrypt\n/Filter /Standard\n/V 1\n/R 2\n/Length 40\n/P ${P}\n/O <${toHexString(OValue)}>\n/U <${toHexString(UValue)}>\n>>\nendobj\n`;
-
-  const fileIdHex = toHexString(fileId);
-
-  // Insert encrypt object before trailer
-  const beforeTrailer = pdfStr.substring(0, trailerIdx);
-  const afterTrailer = pdfStr.substring(trailerIdx);
-
-  // Add /Encrypt reference and /ID to the trailer dictionary
-  const modifiedTrailer = afterTrailer.replace(
-    /trailer\s*<<([\s\S]*?)>>/,
-    (fullMatch: string, inner: string) => {
-      let newInner = inner;
-      // Add Encrypt reference
-      newInner += `\n/Encrypt ${encObjNum} 0 R`;
-      // Add file ID
-      newInner += `\n/ID [<${fileIdHex}> <${fileIdHex}>]`;
-      return `trailer\n<<${newInner}>>`;
-    }
-  );
-
-  const finalStr = beforeTrailer + encryptDict + modifiedTrailer;
-
-  // Convert back to bytes
-  const encoder = new TextEncoder();
-  const finalBytes = encoder.encode(finalStr);
-
-  return finalBytes;
 }
 
 /**
- * Unlock Password Protected PDF using PDF.js + pdf-lib stream decryption
+ * Unlock Password Protected PDF using PDF.js decryption + clean unencrypted recreation
  */
 export async function unlockPDF(file: File, passwordInput: string): Promise<Uint8Array> {
   const arrayBuffer = await file.arrayBuffer();
@@ -699,28 +547,38 @@ export async function unlockPDF(file: File, passwordInput: string): Promise<Uint
     const newPdf = await PDFDocument.create();
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: 2.0 });
+      const origViewport = page.getViewport({ scale: 1.0 });
+      const renderViewport = page.getViewport({ scale: 2.0 });
+
       const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+      canvas.width = renderViewport.width;
+      canvas.height = renderViewport.height;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-        const imgDataUrl = canvas.toDataURL('image/jpeg', 0.95);
-        const imgBuffer = await (await fetch(imgDataUrl)).arrayBuffer();
-        const embeddedImg = await newPdf.embedJpg(imgBuffer);
-        const p = newPdf.addPage([viewport.width / 2, viewport.height / 2]);
-        p.drawImage(embeddedImg, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
+        await page.render({ canvasContext: ctx, viewport: renderViewport, canvas } as any).promise;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        const base64 = dataUrl.split(',')[1];
+        const binary = atob(base64);
+        const imgBytes = new Uint8Array(binary.length);
+        for (let b = 0; b < binary.length; b++) imgBytes[b] = binary.charCodeAt(b);
+
+        const embeddedImg = await newPdf.embedJpg(imgBytes);
+        const p = newPdf.addPage([origViewport.width, origViewport.height]);
+        p.drawImage(embeddedImg, {
+          x: 0,
+          y: 0,
+          width: origViewport.width,
+          height: origViewport.height,
+        });
       }
     }
 
     return await newPdf.save();
   } catch (err: any) {
-    if (err.name === 'PasswordException' || err.message?.includes('password')) {
+    if (err.name === 'PasswordException' || err.message?.toLowerCase().includes('password')) {
       throw new Error('Incorrect password provided. Please enter the correct PDF password.');
     }
-    const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-    return await pdfDoc.save();
+    throw new Error(err.message || 'Failed to unlock PDF. Please verify password.');
   }
 }
 
@@ -1069,7 +927,98 @@ export async function performOCR(
 }
 
 /**
- * Extract text lines page by page from PDF using PDF.js
+ * Render formatted plain text or document content into a clean, multi-page PDF
+ */
+export async function renderTextToPDF(title: string, content: string): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.create();
+  const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const pageWidth = 595.28; // A4
+  const pageHeight = 841.89;
+  const margin = 50;
+  const contentWidth = pageWidth - margin * 2;
+  const fontSize = 10;
+  const lineHeight = 15;
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let currentY = pageHeight - margin;
+
+  // Header Title
+  page.drawText(title, {
+    x: margin,
+    y: currentY - 14,
+    size: 16,
+    font: fontBold,
+    color: rgb(0.12, 0.16, 0.22),
+  });
+  currentY -= 26;
+
+  page.drawLine({
+    start: { x: margin, y: currentY },
+    end: { x: pageWidth - margin, y: currentY },
+    thickness: 1,
+    color: rgb(0.85, 0.88, 0.92),
+  });
+  currentY -= 20;
+
+  const paragraphs = content.split(/\r?\n\r?\n|\n/);
+
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) {
+      currentY -= 8;
+      continue;
+    }
+
+    const words = trimmed.split(/\s+/);
+    let line = '';
+
+    for (const word of words) {
+      const testLine = line ? `${line} ${word}` : word;
+      const testWidth = fontRegular.widthOfTextAtSize(testLine, fontSize);
+      if (testWidth > contentWidth && line) {
+        if (currentY - lineHeight < margin) {
+          page = pdfDoc.addPage([pageWidth, pageHeight]);
+          currentY = pageHeight - margin;
+        }
+        page.drawText(line, {
+          x: margin,
+          y: currentY,
+          size: fontSize,
+          font: fontRegular,
+          color: rgb(0.15, 0.18, 0.23),
+        });
+        currentY -= lineHeight;
+        line = word;
+      } else {
+        line = testLine;
+      }
+    }
+
+    if (line) {
+      if (currentY - lineHeight < margin) {
+        page = pdfDoc.addPage([pageWidth, pageHeight]);
+        currentY = pageHeight - margin;
+      }
+      page.drawText(line, {
+        x: margin,
+        y: currentY,
+        size: fontSize,
+        font: fontRegular,
+        color: rgb(0.15, 0.18, 0.23),
+      });
+      currentY -= lineHeight;
+    }
+
+    currentY -= 6;
+  }
+
+  return await pdfDoc.save();
+}
+
+/**
+ * Extract text lines page by page from PDF with natural reading order and word spacing
  */
 export async function extractTextPagesFromPDF(file: File): Promise<string[][]> {
   const arrayBuffer = await file.arrayBuffer();
@@ -1080,40 +1029,72 @@ export async function extractTextPagesFromPDF(file: File): Promise<string[][]> {
   for (let i = 1; i <= numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    
+
+    interface PDFTextItem {
+      str: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+
+    const items: PDFTextItem[] = [];
+    for (const rawItem of textContent.items as any[]) {
+      if (rawItem && typeof rawItem.str === 'string' && rawItem.str.length > 0) {
+        const tx = rawItem.transform || [1, 0, 0, 1, 0, 0];
+        items.push({
+          str: rawItem.str,
+          x: tx[4] ?? 0,
+          y: tx[5] ?? 0,
+          width: rawItem.width ?? 0,
+          height: rawItem.height || Math.abs(tx[3]) || 12,
+        });
+      }
+    }
+
+    // Sort items top-to-bottom (Y descending), then left-to-right (X ascending)
+    items.sort((a, b) => {
+      const yDiff = b.y - a.y;
+      if (Math.abs(yDiff) > 4) {
+        return yDiff;
+      }
+      return a.x - b.x;
+    });
+
     const lines: string[] = [];
     let currentLine = '';
     let lastY: number | null = null;
+    let lastX = 0;
+    let lastW = 0;
 
-    for (const item of textContent.items as any[]) {
-      if ('str' in item) {
-        const y = item.transform ? item.transform[5] : null;
-        if (lastY !== null && y !== null && Math.abs(y - lastY) > 5) {
-          if (currentLine.trim()) {
-            lines.push(currentLine.trim());
-          }
-          currentLine = '';
+    for (const item of items) {
+      if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+        if (currentLine.trim()) {
+          lines.push(currentLine.trim());
         }
-        currentLine += item.str + (item.hasEOL ? ' ' : '');
-        if (y !== null) lastY = y;
+        currentLine = '';
+        lastX = 0;
+        lastW = 0;
       }
+
+      if (currentLine && lastW > 0 && (item.x - (lastX + lastW)) > 2 && !currentLine.endsWith(' ') && !item.str.startsWith(' ')) {
+        currentLine += ' ';
+      }
+
+      currentLine += item.str;
+      lastY = item.y;
+      lastX = item.x;
+      lastW = item.width;
     }
+
     if (currentLine.trim()) {
       lines.push(currentLine.trim());
     }
+
     pagesParagraphs.push(lines.length > 0 ? lines : ['[No readable text detected on this page]']);
   }
-  return pagesParagraphs;
-}
 
-function escapeXmlString(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  return pagesParagraphs;
 }
 
 /**
@@ -1121,43 +1102,40 @@ function escapeXmlString(unsafe: string): string {
  */
 export async function convertPDFToWord(file: File): Promise<Uint8Array> {
   const pagesParagraphs = await extractTextPagesFromPDF(file);
-  const zip = new JSZip();
 
-  // 1. [Content_Types].xml
-  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>`);
-
-  // 2. _rels/.rels
-  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`);
-
-  // 3. word/document.xml
-  let documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:body>`;
-
-  pagesParagraphs.forEach((paragraphs, pageIdx) => {
-    if (pageIdx > 0) {
-      documentXml += `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
-    }
-    paragraphs.forEach((pText) => {
-      const escaped = escapeXmlString(pText);
-      documentXml += `<w:p><w:r><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`;
-    });
+  const doc = new Document({
+    sections: pagesParagraphs.map((paragraphs, pageIdx) => ({
+      properties: {
+        page: {
+          margin: {
+            top: 1440,
+            right: 1440,
+            bottom: 1440,
+            left: 1440,
+          },
+        },
+      },
+      children: [
+        ...(pageIdx > 0 ? [new Paragraph({ children: [new TextRun({ break: 1 })] })] : []),
+        ...paragraphs.map((line) => new Paragraph({
+          children: [
+            new TextRun({
+              text: line,
+              size: 24, // 12pt
+              font: 'Calibri',
+            }),
+          ],
+          spacing: {
+            after: 120, // 6pt
+            line: 276, // 1.15
+          },
+        })),
+      ],
+    })),
   });
 
-  documentXml += `</w:body>
-</w:document>`;
-
-  zip.file('word/document.xml', documentXml);
-
-  return await zip.generateAsync({ type: 'uint8array' });
+  const arrayBuffer = await Packer.toArrayBuffer(doc);
+  return new Uint8Array(arrayBuffer);
 }
 
 /**
@@ -1165,73 +1143,27 @@ export async function convertPDFToWord(file: File): Promise<Uint8Array> {
  */
 export async function convertPDFToExcel(file: File): Promise<Uint8Array> {
   const pagesParagraphs = await extractTextPagesFromPDF(file);
-  const zip = new JSZip();
-
-  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>`);
-
-  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>`);
-
-  zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
-  </sheets>
-</workbook>`);
-
-  zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>`);
-
-  function getColumnLetter(colIndex: number): string {
-    let temp: number;
-    let letter = '';
-    while (colIndex > 0) {
-      temp = (colIndex - 1) % 26;
-      letter = String.fromCharCode(65 + temp) + letter;
-      colIndex = Math.floor((colIndex - temp - 1) / 26);
-    }
-    return letter;
-  }
-
-  let rowIdx = 1;
-  let sheetRows = '';
+  const rows: string[][] = [];
 
   pagesParagraphs.forEach((paragraphs) => {
     paragraphs.forEach((line) => {
       const cols = line.split(/\t+|\s{2,}|,/);
-      let colXml = '';
-      let cIdx = 1;
-      cols.forEach((cell) => {
-        const val = escapeXmlString(cell.trim());
-        if (val) {
-          const cellRef = `${getColumnLetter(cIdx)}${rowIdx}`;
-          colXml += `<c r="${cellRef}" t="inlineStr"><is><t>${val}</t></is></c>`;
-          cIdx++;
-        }
-      });
-      if (colXml) {
-        sheetRows += `<row r="${rowIdx}">${colXml}</row>`;
-        rowIdx++;
+      const cleanCols = cols.map(c => c.trim());
+      if (cleanCols.some(c => c.length > 0)) {
+        rows.push(cleanCols);
       }
     });
   });
 
-  zip.file('xl/worksheets/sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <sheetData>${sheetRows}</sheetData>
-</worksheet>`);
+  if (rows.length === 0) {
+    rows.push(['No readable tabular data found in PDF']);
+  }
 
-  return await zip.generateAsync({ type: 'uint8array' });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  const u8 = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  return new Uint8Array(u8);
 }
 
 /**
@@ -1239,137 +1171,500 @@ export async function convertPDFToExcel(file: File): Promise<Uint8Array> {
  */
 export async function convertPDFToPPT(file: File): Promise<Uint8Array> {
   const pagesParagraphs = await extractTextPagesFromPDF(file);
-  const zip = new JSZip();
-
-  let contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>`;
-
-  let presentationRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`;
-
-  let sldIdLstXml = '';
+  const PptxGen = (await import('pptxgenjs')).default;
+  const pptx = new PptxGen();
 
   pagesParagraphs.forEach((paragraphs, index) => {
+    const slide = pptx.addSlide();
     const slideNum = index + 1;
-    contentTypesXml += `\n  <Override PartName="/ppt/slides/slide${slideNum}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
-    presentationRelsXml += `\n  <Relationship Id="rIdSlide${slideNum}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${slideNum}.xml"/>`;
-    sldIdLstXml += `\n    <p:sldId id="${255 + slideNum}" r:id="rIdSlide${slideNum}"/>`;
 
-    let pShapesXml = '';
-    paragraphs.forEach((pText) => {
-      const escaped = escapeXmlString(pText);
-      pShapesXml += `<a:p><a:r><a:rPr lang="en-US"/><a:t>${escaped}</a:t></a:r></a:p>`;
-    });
+    if (paragraphs.length > 0) {
+      const title = paragraphs[0].slice(0, 80);
+      slide.addText(title, {
+        x: 0.8,
+        y: 0.6,
+        w: 8.4,
+        h: 0.8,
+        fontSize: 20,
+        bold: true,
+        color: '1E293B',
+      });
 
-    const slideXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld>
-    <p:spTree>
-      <p:nvGrpSpPr>
-        <p:cNvPr id="1" name=""/>
-        <p:cNvGrpSpPr/>
-        <p:nvPr/>
-      </p:nvGrpSpPr>
-      <p:grpSpPr/>
-      <p:sp>
-        <p:nvSpPr>
-          <p:cNvPr id="2" name="Slide Text"/>
-          <p:cNvSpPr/>
-          <p:nvPr/>
-        </p:nvSpPr>
-        <p:spPr/>
-        <p:txBody>
-          <a:bodyPr/>
-          <a:lstStyle/>
-          ${pShapesXml}
-        </p:txBody>
-      </p:sp>
-    </p:spTree>
-  </p:cSld>
-</p:sld>`;
-
-    zip.file(`ppt/slides/slide${slideNum}.xml`, slideXml);
+      const bodyText = paragraphs.slice(1).join('\n\n');
+      if (bodyText.trim()) {
+        slide.addText(bodyText, {
+          x: 0.8,
+          y: 1.6,
+          w: 8.4,
+          h: 4.8,
+          fontSize: 12,
+          color: '334155',
+          lineSpacing: 18,
+        });
+      }
+    } else {
+      slide.addText(`Slide ${slideNum}`, {
+        x: 0.8,
+        y: 2.5,
+        w: 8.4,
+        h: 1.0,
+        fontSize: 24,
+        bold: true,
+        color: '64748B',
+        align: 'center',
+      });
+    }
   });
 
-  contentTypesXml += `\n</Types>`;
-  presentationRelsXml += `\n</Relationships>`;
-
-  zip.file('[Content_Types].xml', contentTypesXml);
-  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
-</Relationships>`);
-
-  zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:sldIdLst>${sldIdLstXml}
-  </p:sldIdLst>
-  <p:sldSz cx="9144000" cy="6858000"/>
-  <p:notesSz cx="6858000" cy="9144000"/>
-</p:presentation>`);
-
-  zip.file('ppt/_rels/presentation.xml.rels', presentationRelsXml);
-
-  return await zip.generateAsync({ type: 'uint8array' });
+  const data = await pptx.write({ outputType: 'uint8array' });
+  return data as Uint8Array;
 }
 
 /**
- * Convert text or office document to PDF
+ * Convert Microsoft Word (.docx, .doc) to PDF
+ */
+export async function convertWordToPDF(file: File): Promise<Uint8Array> {
+  const arrayBuffer = await file.arrayBuffer();
+  let extractedText = '';
+
+  // 1. Try mammoth
+  try {
+    const input = typeof Buffer !== 'undefined' ? { buffer: Buffer.from(arrayBuffer) } : { arrayBuffer };
+    const res = await mammoth.extractRawText(input as any);
+    if (res && res.value && res.value.trim().length > 0) {
+      extractedText = res.value;
+    }
+  } catch (err) {
+    console.warn('Mammoth extraction failed, falling back to JSZip:', err);
+  }
+
+  // 2. JSZip fallback for DOCX
+  if (!extractedText.trim()) {
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const docXml = await zip.file('word/document.xml')?.async('text');
+      if (docXml) {
+        const pMatches = docXml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) || [];
+        const lines: string[] = [];
+        for (const pXml of pMatches) {
+          const tMatches = Array.from(pXml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)).map(m => m[1]);
+          const line = tMatches.join('').trim();
+          if (line) lines.push(line);
+        }
+        if (lines.length > 0) {
+          extractedText = lines.join('\n\n');
+        }
+      }
+    } catch (err) {
+      console.warn('JSZip DOCX fallback failed:', err);
+    }
+  }
+
+  // 3. Fallback for legacy .doc binary format
+  if (!extractedText.trim()) {
+    try {
+      const decoder = new TextDecoder('latin1');
+      const raw = decoder.decode(arrayBuffer);
+      const matches = raw.match(/[\x20-\x7E\xA0-\xFF]{4,}/g) || [];
+      const cleanLines = matches
+        .map(s => s.trim())
+        .filter(s => s.length > 3 && !s.includes('CompObj') && !s.includes('WordDocument') && !s.startsWith('\x00'));
+      if (cleanLines.length > 0) {
+        extractedText = cleanLines.join('\n');
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (!extractedText.trim()) {
+    extractedText = `Document: ${file.name}\n\n[No readable text could be extracted from this document]`;
+  }
+
+  return await renderTextToPDF(file.name.replace(/\.[^/.]+$/, ''), extractedText);
+}
+
+/**
+ * Convert Microsoft Excel (.xlsx, .xls, .csv) to styled landscape PDF
+ */
+export async function convertExcelToPDF(file: File): Promise<Uint8Array> {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+
+  const pdfDoc = await PDFDocument.create();
+  const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const pageWidth = 841.89; // Landscape A4
+  const pageHeight = 595.28;
+  const margin = 40;
+  const contentWidth = pageWidth - margin * 2;
+  const fontSize = 8.5;
+  const cellPadding = 4;
+  const rowHeight = 18;
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rawRows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '' });
+    if (!rawRows || rawRows.length === 0) continue;
+
+    const rows = rawRows.filter(r => Array.isArray(r) && r.some(c => String(c).trim().length > 0));
+    if (rows.length === 0) continue;
+
+    const colCount = Math.min(12, Math.max(...rows.map(r => r.length)));
+    if (colCount === 0) continue;
+
+    const colWidth = contentWidth / colCount;
+
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let currentY = pageHeight - margin;
+
+    // Sheet Title Header
+    page.drawText(`${file.name.replace(/\.[^/.]+$/, '')} — ${sheetName}`, {
+      x: margin,
+      y: currentY - 12,
+      size: 14,
+      font: fontBold,
+      color: rgb(0.12, 0.16, 0.22),
+    });
+    currentY -= 26;
+
+    for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+      if (currentY - rowHeight < margin) {
+        page = pdfDoc.addPage([pageWidth, pageHeight]);
+        currentY = pageHeight - margin;
+      }
+
+      const row = rows[rIdx];
+      const isHeader = rIdx === 0;
+
+      // Row background
+      if (isHeader) {
+        page.drawRectangle({
+          x: margin,
+          y: currentY - rowHeight,
+          width: contentWidth,
+          height: rowHeight,
+          color: rgb(0.92, 0.94, 0.97),
+        });
+      } else if (rIdx % 2 === 1) {
+        page.drawRectangle({
+          x: margin,
+          y: currentY - rowHeight,
+          width: contentWidth,
+          height: rowHeight,
+          color: rgb(0.98, 0.98, 0.99),
+        });
+      }
+
+      // Draw Cells
+      for (let cIdx = 0; cIdx < colCount; cIdx++) {
+        const cellX = margin + cIdx * colWidth;
+        const cellVal = String(row[cIdx] ?? '').trim();
+
+        page.drawRectangle({
+          x: cellX,
+          y: currentY - rowHeight,
+          width: colWidth,
+          height: rowHeight,
+          borderColor: rgb(0.85, 0.88, 0.92),
+          borderWidth: 0.5,
+        });
+
+        if (cellVal) {
+          let displayVal = cellVal;
+          const maxTextW = colWidth - cellPadding * 2;
+          const activeFont = isHeader ? fontBold : fontRegular;
+          while (displayVal.length > 3 && activeFont.widthOfTextAtSize(displayVal, fontSize) > maxTextW) {
+            displayVal = displayVal.slice(0, -2) + '…';
+          }
+
+          page.drawText(displayVal, {
+            x: cellX + cellPadding,
+            y: currentY - rowHeight + 5,
+            size: fontSize,
+            font: activeFont,
+            color: isHeader ? rgb(0.1, 0.15, 0.2) : rgb(0.2, 0.25, 0.3),
+          });
+        }
+      }
+
+      currentY -= rowHeight;
+    }
+  }
+
+  if (pdfDoc.getPageCount() === 0) {
+    const page = pdfDoc.addPage([pageWidth, pageHeight]);
+    page.drawText(`Spreadsheet: ${file.name} (No sheet data found)`, {
+      x: margin,
+      y: pageHeight - margin - 20,
+      size: 14,
+      font: fontBold,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+  }
+
+  return await pdfDoc.save();
+}
+
+/**
+ * Convert Microsoft PowerPoint (.pptx, .ppt) to styled slide presentation PDF
+ */
+export async function convertPPTToPDF(file: File): Promise<Uint8Array> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.create();
+  const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const slideWidth = 841.89; // Standard 16:9 Landscape
+  const slideHeight = 473.56;
+  const margin = 45;
+
+  let slideCount = 0;
+
+  try {
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    const slideFiles = Object.keys(zip.files)
+      .filter(name => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/\d+/)![0], 10);
+        const numB = parseInt(b.match(/\d+/)![0], 10);
+        return numA - numB;
+      });
+
+    for (let i = 0; i < slideFiles.length; i++) {
+      const xml = await zip.file(slideFiles[i])?.async('text');
+      if (!xml) continue;
+
+      slideCount++;
+      const page = pdfDoc.addPage([slideWidth, slideHeight]);
+
+      // Slide boundary card
+      page.drawRectangle({
+        x: 15,
+        y: 15,
+        width: slideWidth - 30,
+        height: slideHeight - 30,
+        borderColor: rgb(0.88, 0.9, 0.94),
+        borderWidth: 1,
+        color: rgb(0.99, 0.99, 1),
+      });
+
+      const paragraphs: string[] = [];
+      const pMatches = xml.match(/<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g) || [];
+      for (const pXml of pMatches) {
+        const tMatches = Array.from(pXml.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)).map(m => m[1]);
+        const text = tMatches.join('').trim();
+        if (text) {
+          paragraphs.push(text);
+        }
+      }
+
+      let currentY = slideHeight - margin - 20;
+
+      if (paragraphs.length > 0) {
+        const titleText = paragraphs[0];
+        page.drawText(titleText.slice(0, 70), {
+          x: margin,
+          y: currentY,
+          size: 20,
+          font: fontBold,
+          color: rgb(0.12, 0.16, 0.24),
+        });
+        currentY -= 28;
+
+        page.drawLine({
+          start: { x: margin, y: currentY },
+          end: { x: slideWidth - margin, y: currentY },
+          thickness: 1.5,
+          color: rgb(0.82, 0.85, 0.9),
+        });
+        currentY -= 25;
+
+        for (let pIdx = 1; pIdx < paragraphs.length; pIdx++) {
+          if (currentY < margin + 30) break;
+          const bodyText = `•  ${paragraphs[pIdx]}`;
+          page.drawText(bodyText.slice(0, 110), {
+            x: margin + 10,
+            y: currentY,
+            size: 13,
+            font: fontRegular,
+            color: rgb(0.2, 0.24, 0.3),
+          });
+          currentY -= 22;
+        }
+      } else {
+        page.drawText(`Slide ${i + 1}`, {
+          x: margin,
+          y: currentY,
+          size: 22,
+          font: fontBold,
+          color: rgb(0.2, 0.2, 0.2),
+        });
+      }
+
+      page.drawText(`Slide ${i + 1} of ${slideFiles.length}`, {
+        x: slideWidth - margin - 80,
+        y: 25,
+        size: 9,
+        font: fontRegular,
+        color: rgb(0.6, 0.65, 0.7),
+      });
+    }
+  } catch (err) {
+    console.warn('PPTX parsing error:', err);
+  }
+
+  if (slideCount === 0) {
+    return await renderTextToPDF(file.name.replace(/\.[^/.]+$/, ''), `Presentation: ${file.name}`);
+  }
+
+  return await pdfDoc.save();
+}
+
+/**
+ * Convert HTML document to PDF with visual canvas rendering and semantic fallback
+ */
+export async function convertHTMLToPDF(file: File): Promise<Uint8Array> {
+  const htmlText = await file.text();
+
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    try {
+      const container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.top = '-99999px';
+      container.style.left = '-99999px';
+      container.style.width = '800px';
+      container.style.background = '#ffffff';
+      container.style.color = '#000000';
+      container.style.padding = '30px';
+      container.style.boxSizing = 'border-box';
+      container.innerHTML = htmlText;
+      document.body.appendChild(container);
+
+      // Allow a brief moment for styles/images to settle
+      await new Promise(r => setTimeout(r, 120));
+
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+      });
+
+      document.body.removeChild(container);
+
+      const pdfDoc = await PDFDocument.create();
+      const a4Width = 595.28;
+      const a4Height = 841.89;
+      const pageCanvasHeight = (canvas.width * a4Height) / a4Width;
+      let renderedHeight = 0;
+
+      while (renderedHeight < canvas.height) {
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = canvas.width;
+        sliceCanvas.height = Math.min(pageCanvasHeight, canvas.height - renderedHeight);
+        const ctx = sliceCanvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(
+            canvas,
+            0,
+            renderedHeight,
+            canvas.width,
+            sliceCanvas.height,
+            0,
+            0,
+            canvas.width,
+            sliceCanvas.height
+          );
+
+          const dataUrl = sliceCanvas.toDataURL('image/jpeg', 0.95);
+          const base64 = dataUrl.split(',')[1];
+          const binaryStr = atob(base64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let b = 0; b < binaryStr.length; b++) bytes[b] = binaryStr.charCodeAt(b);
+
+          const embedded = await pdfDoc.embedJpg(bytes);
+          const sliceHeightPdf = (sliceCanvas.height * a4Width) / canvas.width;
+          const page = pdfDoc.addPage([a4Width, a4Height]);
+          page.drawImage(embedded, {
+            x: 0,
+            y: a4Height - sliceHeightPdf,
+            width: a4Width,
+            height: sliceHeightPdf,
+          });
+        }
+        renderedHeight += pageCanvasHeight;
+      }
+
+      if (pdfDoc.getPageCount() > 0) {
+        return await pdfDoc.save();
+      }
+    } catch (err) {
+      console.warn('Visual HTML rendering failed, falling back to semantic layout:', err);
+    }
+  }
+
+  // Semantic fallback
+  let cleanText = '';
+  if (typeof DOMParser !== 'undefined') {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlText, 'text/html');
+    doc.querySelectorAll('script, style, noscript, svg').forEach(el => el.remove());
+    cleanText = doc.body?.textContent || doc.body?.innerText || '';
+  } else {
+    cleanText = htmlText
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"');
+  }
+
+  cleanText = cleanText.replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
+  return await renderTextToPDF(file.name.replace(/\.[^/.]+$/, ''), cleanText);
+}
+
+/**
+ * Smart dispatcher: Convert text or office document to PDF
  */
 export async function convertDocumentToPDF(file: File): Promise<Uint8Array> {
-  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+  const fileName = file.name.toLowerCase();
+
+  if (file.type === 'application/pdf' || fileName.endsWith('.pdf')) {
     const buf = await file.arrayBuffer();
     const pdfDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
     return await pdfDoc.save();
   }
 
+  if (fileName.endsWith('.docx') || fileName.endsWith('.doc')) {
+    return await convertWordToPDF(file);
+  }
+
+  if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) {
+    return await convertExcelToPDF(file);
+  }
+
+  if (fileName.endsWith('.pptx') || fileName.endsWith('.ppt')) {
+    return await convertPPTToPDF(file);
+  }
+
+  if (fileName.endsWith('.html') || fileName.endsWith('.htm')) {
+    return await convertHTMLToPDF(file);
+  }
+
+  // Plain text fallback
   let text = '';
   try {
     text = await file.text();
-    text = text.replace(/[^\x20-\x7E\x0A\x0D]/g, ' ').replace(/\s+/g, ' ');
   } catch (err) {
     text = `Document Content: ${file.name}`;
   }
-
-  const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  let page = pdfDoc.addPage([595.28, 841.89]);
-  const { width, height } = page.getSize();
-
-  const fontSize = 11;
-  const margin = 50;
-  const maxWidth = width - margin * 2;
-  let currentY = height - margin;
-
-  page.drawText(file.name, { x: margin, y: currentY, size: 16, font, color: rgb(0.8, 0.1, 0.1) });
-  currentY -= 30;
-
-  const words = text.split(' ');
-  let lineBuffer = '';
-
-  for (const word of words) {
-    const testLine = lineBuffer ? `${lineBuffer} ${word}` : word;
-    const testWidth = font.widthOfTextAtSize(testLine, fontSize);
-    if (testWidth > maxWidth && lineBuffer) {
-      page.drawText(lineBuffer, { x: margin, y: currentY, size: fontSize, font, color: rgb(0.1, 0.1, 0.1) });
-      currentY -= fontSize * 1.4;
-      if (currentY < margin + fontSize * 2) {
-        page = pdfDoc.addPage([595.28, 841.89]);
-        currentY = height - margin;
-      }
-      lineBuffer = word;
-    } else {
-      lineBuffer = testLine;
-    }
-  }
-  if (lineBuffer) {
-    page.drawText(lineBuffer, { x: margin, y: currentY, size: fontSize, font, color: rgb(0.1, 0.1, 0.1) });
-  }
-
-  return await pdfDoc.save();
+  return await renderTextToPDF(file.name.replace(/\.[^/.]+$/, ''), text);
 }
 
 /**

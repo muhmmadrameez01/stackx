@@ -3,7 +3,7 @@ import { deleteBlogPost } from '@/lib/blogService';
 
 function verifyAdmin(request: Request): boolean {
   const secretHeader = request.headers.get('x-admin-secret');
-  const envSecret = process.env.ADMIN_SECRET_KEY || 'tools726admin';
+  const envSecret = process.env.ADMIN_SECRET_KEY || 'Allah@726';
   return secretHeader === envSecret;
 }
 

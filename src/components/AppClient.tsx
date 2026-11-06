@@ -22,6 +22,7 @@ import { SeoDevWorkspace } from '../components/SeoDevWorkspace';
 import { CalculatorWorkspace } from '../components/CalculatorWorkspace';
 import { QRGeneratorWorkspace } from '../components/QRGeneratorWorkspace';
 import { Footer } from '../components/Footer';
+import { AdBanner } from '../components/AdBanner';
 
 import { TOOLS } from '../config/tools';
 import type { ToolId, CategoryId, PDFPageMeta, WatermarkOptions, PageNumberOptions } from '../types';
@@ -45,6 +46,10 @@ import {
   convertPDFToWord,
   convertPDFToExcel,
   convertPDFToPPT,
+  convertWordToPDF,
+  convertExcelToPDF,
+  convertPPTToPDF,
+  convertHTMLToPDF,
   convertDocumentToPDF,
   repairPDF,
 } from '../services/pdfService';
@@ -344,14 +349,27 @@ export default function App() {
         setResultBytes(bytes);
         setOutputFileName(`${baseName}_pdfa.pdf`);
         setOutputMimeType('application/pdf');
-      } else if (
-        selectedToolId === 'word-to-pdf' ||
-        selectedToolId === 'excel-to-pdf' ||
-        selectedToolId === 'ppt-to-pdf' ||
-        selectedToolId === 'html-to-pdf'
-      ) {
-        if (files.length === 0) throw new Error('Please upload a document file.');
-        const bytes = await convertDocumentToPDF(files[0]);
+      } else if (selectedToolId === 'word-to-pdf') {
+        if (files.length === 0) throw new Error('Please upload a Word (.docx, .doc) file.');
+        const bytes = await convertWordToPDF(files[0]);
+        setResultBytes(bytes);
+        setOutputFileName(`${baseName}_converted.pdf`);
+        setOutputMimeType('application/pdf');
+      } else if (selectedToolId === 'excel-to-pdf') {
+        if (files.length === 0) throw new Error('Please upload an Excel (.xlsx, .xls, .csv) file.');
+        const bytes = await convertExcelToPDF(files[0]);
+        setResultBytes(bytes);
+        setOutputFileName(`${baseName}_converted.pdf`);
+        setOutputMimeType('application/pdf');
+      } else if (selectedToolId === 'ppt-to-pdf') {
+        if (files.length === 0) throw new Error('Please upload a PowerPoint (.pptx, .ppt) file.');
+        const bytes = await convertPPTToPDF(files[0]);
+        setResultBytes(bytes);
+        setOutputFileName(`${baseName}_converted.pdf`);
+        setOutputMimeType('application/pdf');
+      } else if (selectedToolId === 'html-to-pdf') {
+        if (files.length === 0) throw new Error('Please upload an HTML (.html, .htm) file.');
+        const bytes = await convertHTMLToPDF(files[0]);
         setResultBytes(bytes);
         setOutputFileName(`${baseName}_converted.pdf`);
         setOutputMimeType('application/pdf');
@@ -394,6 +412,9 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        
+        {/* Top Header AdSense Placement */}
+        <AdBanner placement="headerBanner" />
         
         {!selectedToolId ? (
           /* Home Grid Mode */
@@ -607,6 +628,9 @@ export default function App() {
 
           </div>
         )}
+
+        {/* Bottom AdSense Placement */}
+        {selectedToolId && <AdBanner placement="toolBottomBanner" />}
 
       </main>
 

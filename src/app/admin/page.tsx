@@ -29,8 +29,16 @@ import {
   ArrowRight,
   PenTool,
   Sparkles,
-  LayoutDashboard
+  LayoutDashboard,
+  DollarSign,
+  TrendingUp,
+  MousePointerClick,
+  Copy,
+  ExternalLink,
+  Layers,
+  Sliders
 } from 'lucide-react';
+import type { AdSenseConfig, AdSenseAnalytics } from '@/types';
 
 interface Post {
   id: string;
@@ -90,10 +98,32 @@ export default function CentralAdminDashboard() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authenticated, setAuthenticated] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'overview' | 'blog' | 'editor' | 'static' | 'tools' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'blog' | 'editor' | 'static' | 'tools' | 'settings' | 'monetization'>('overview');
+
+  // AdSense States
+  const [adConfig, setAdConfig] = useState<AdSenseConfig>({
+    enabled: false,
+    publisherId: '',
+    autoAds: true,
+    testMode: true,
+    slots: {
+      headerBanner: '',
+      toolResultBanner: '',
+      toolBottomBanner: '',
+      blogSidebarBanner: '',
+    },
+    adsTxt: '',
+  });
+  const [adAnalytics, setAdAnalytics] = useState<AdSenseAnalytics | null>(null);
+  const [loadingAdSense, setLoadingAdSense] = useState(false);
+  const [savingAdSense, setSavingAdSense] = useState(false);
+  const [adSenseSavedMessage, setAdSenseSavedMessage] = useState<string | null>(null);
+  const [copiedAdsTxt, setCopiedAdsTxt] = useState(false);
+  const [chartView, setChartView] = useState<'7d' | '14d'>('14d');
 
   // Blog States
   const [posts, setPosts] = useState<Post[]>([]);
@@ -120,36 +150,56 @@ export default function CentralAdminDashboard() {
   const [staticContent, setStaticContent] = useState('');
 
   useEffect(() => {
-    const savedAuth = localStorage.getItem('tools726_admin_auth');
+    const savedAuth = localStorage.getItem('stackx_admin_auth') || localStorage.getItem('tools726_admin_auth');
     if (savedAuth === 'true') {
       setAuthenticated(true);
       fetchPosts();
+      fetchAdSense();
     }
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setLoggingIn(true);
 
-    // Accept default admin@stackx.com or admin@tools726.com / stackxadmin or tools726admin
-    if (
-      email.trim() === 'admin@stackx.com' ||
-      email.trim() === 'admin@tools726.com' ||
-      password === 'stackxadmin' ||
-      password === 'tools726admin'
-    ) {
-      localStorage.setItem('tools726_admin_auth', 'true');
-      localStorage.setItem('stackx_admin_auth', 'true');
-      setAuthenticated(true);
-      fetchPosts();
-    } else {
-      setLoginError('Invalid email address or password credentials.');
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        localStorage.setItem('stackx_admin_auth', 'true');
+        localStorage.setItem('tools726_admin_auth', 'true');
+        if (data.secretKey) {
+          localStorage.setItem('stackx_admin_secret', data.secretKey);
+          localStorage.setItem('tools726_admin_secret', data.secretKey);
+        }
+        setAuthenticated(true);
+        fetchPosts();
+        fetchAdSense();
+      } else {
+        setLoginError(data.error || 'Invalid email address or password.');
+      }
+    } catch {
+      setLoginError('An error occurred during sign-in. Please try again.');
+    } finally {
+      setLoggingIn(false);
     }
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('stackx_admin_auth');
+    localStorage.removeItem('stackx_admin_secret');
     localStorage.removeItem('tools726_admin_auth');
+    localStorage.removeItem('tools726_admin_secret');
     setAuthenticated(false);
+  };
+
+  const getAdminSecret = () => {
+    return localStorage.getItem('stackx_admin_secret') || localStorage.getItem('tools726_admin_secret') || 'Allah@726';
   };
 
   const fetchPosts = async () => {
@@ -160,10 +210,57 @@ export default function CentralAdminDashboard() {
       if (data.success) {
         setPosts(data.posts || []);
       }
-    } catch (err) {
+    } catch {
       setMessage('Failed to fetch posts');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAdSense = async () => {
+    setLoadingAdSense(true);
+    try {
+      const res = await fetch('/api/admin/adsense', {
+        headers: { 'x-admin-secret': getAdminSecret() },
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (data.config) setAdConfig(data.config);
+        if (data.analytics) setAdAnalytics(data.analytics);
+      }
+    } catch (err) {
+      console.warn('Failed to load AdSense data:', err);
+    } finally {
+      setLoadingAdSense(false);
+    }
+  };
+
+  const handleSaveAdSense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingAdSense(true);
+    setAdSenseSavedMessage(null);
+    try {
+      const res = await fetch('/api/admin/adsense', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': getAdminSecret(),
+        },
+        body: JSON.stringify(adConfig),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdConfig(data.config);
+        setAdSenseSavedMessage('Google AdSense configuration saved successfully!');
+        fetchAdSense();
+        setTimeout(() => setAdSenseSavedMessage(null), 5000);
+      } else {
+        alert(data.error || 'Failed to save AdSense settings.');
+      }
+    } catch {
+      alert('An error occurred while saving AdSense settings.');
+    } finally {
+      setSavingAdSense(false);
     }
   };
 
@@ -172,7 +269,7 @@ export default function CentralAdminDashboard() {
     try {
       const res = await fetch(`/api/admin/blog/${id}`, {
         method: 'DELETE',
-        headers: { 'x-admin-secret': 'tools726admin' },
+        headers: { 'x-admin-secret': getAdminSecret() },
       });
       const data = await res.json();
       if (data.success) {
@@ -241,7 +338,7 @@ export default function CentralAdminDashboard() {
         method: editId ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': 'tools726admin',
+          'x-admin-secret': getAdminSecret(),
         },
         body: JSON.stringify(payload),
       });
@@ -287,13 +384,13 @@ export default function CentralAdminDashboard() {
         <div className="max-w-md w-full p-8 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-2xl backdrop-blur-xl">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-red-600 to-amber-500 p-0.5 shadow-lg shadow-red-600/30 mx-auto mb-6 flex items-center justify-center">
             <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-red-500 font-black text-xl">
-              726
+              SX
             </div>
           </div>
           
-          <h2 className="text-2xl font-black text-center text-white tracking-tight mb-1">Admin Portal Login</h2>
+          <h2 className="text-2xl font-black text-center text-white tracking-tight mb-1">StackX Admin Portal</h2>
           <p className="text-xs text-slate-400 text-center mb-6">
-            Enter your admin email address and password to access the control center.
+            Enter your admin credentials to access the control center.
           </p>
 
           {loginError && (
@@ -307,7 +404,7 @@ export default function CentralAdminDashboard() {
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">Admin Email</label>
               <input
                 type="email"
-                placeholder="admin@tools726.com"
+                placeholder="admin@stackx.si"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:border-red-500 focus:outline-none transition-colors"
@@ -329,15 +426,12 @@ export default function CentralAdminDashboard() {
 
             <button
               type="submit"
-              className="w-full py-3 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 font-bold text-white text-xs rounded-xl transition-all shadow-lg shadow-red-600/25 flex items-center justify-center gap-2"
+              disabled={loggingIn}
+              className="w-full py-3 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 disabled:opacity-50 font-bold text-white text-xs rounded-xl transition-all shadow-lg shadow-red-600/25 flex items-center justify-center gap-2"
             >
-              <Lock className="w-4 h-4" /> Sign In to Dashboard
+              <Lock className="w-4 h-4" /> {loggingIn ? 'Signing In...' : 'Sign In to Dashboard'}
             </button>
           </form>
-          
-          <div className="mt-6 pt-4 border-t border-slate-800 text-center text-[11px] text-slate-500">
-            Default credentials: <code className="text-slate-300">admin@stackx.com</code> / <code className="text-slate-300">stackxadmin</code>
-          </div>
         </div>
       </div>
     );
@@ -410,6 +504,18 @@ export default function CentralAdminDashboard() {
             </button>
 
             <button
+              onClick={() => setActiveTab('monetization')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'monetization' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+            >
+              <span className="flex items-center gap-3">
+                <DollarSign className="w-4 h-4 text-emerald-400" /> Monetization & Ads
+              </span>
+              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${adConfig.enabled ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-950 text-slate-400'}`}>
+                {adConfig.enabled ? 'Active' : 'Setup'}
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('settings')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'settings' ? 'bg-red-600 text-white shadow-lg shadow-red-600/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
@@ -474,7 +580,7 @@ export default function CentralAdminDashboard() {
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
             <div className="space-y-8">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
                 
                 <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-semibold mb-2">
@@ -501,6 +607,23 @@ export default function CentralAdminDashboard() {
                   </div>
                   <div className="text-3xl font-black text-white">{totalViews}</div>
                   <p className="text-[11px] text-slate-500 mt-1">Organic readership views</p>
+                </div>
+
+                {/* AdSense Revenue Overview Card */}
+                <div 
+                  onClick={() => setActiveTab('monetization')}
+                  className="p-6 rounded-2xl bg-gradient-to-br from-slate-900 to-emerald-950/40 border border-emerald-500/30 hover:border-emerald-500/60 cursor-pointer transition-all group"
+                >
+                  <div className="flex items-center justify-between text-slate-400 text-xs font-semibold mb-2">
+                    <span className="text-emerald-400 font-bold">AdSense Revenue</span>
+                    <DollarSign className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-3xl font-black text-white font-mono">
+                    ${adAnalytics ? adAnalytics.earningsToday.toFixed(2) : '0.00'}
+                  </div>
+                  <p className="text-[11px] text-emerald-400/80 mt-1">
+                    {adAnalytics?.clicksToday || 0} Clicks • RPM: ${adAnalytics?.pageRpm.toFixed(2) || '0.00'}
+                  </p>
                 </div>
 
                 <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800">
@@ -792,6 +915,436 @@ export default function CentralAdminDashboard() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* TAB: MONETIZATION & GOOGLE ADSENSE */}
+          {activeTab === 'monetization' && (
+            <div className="space-y-8 max-w-5xl">
+              
+              {/* Header with Live Status */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                      <DollarSign className="w-5 h-5 text-emerald-400" /> Google AdSense & Revenue Dashboard
+                    </h2>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                      adConfig.enabled && adConfig.publisherId
+                        ? 'bg-emerald-950/80 border-emerald-800 text-emerald-400'
+                        : 'bg-amber-950/80 border-amber-800 text-amber-400'
+                    }`}>
+                      {adConfig.enabled && adConfig.publisherId ? '● Live & Active' : '● Setup Required'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Manage your Google AdSense Publisher ID, inspect live revenue/clicks, and control banner placements.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <button
+                    onClick={fetchAdSense}
+                    disabled={loadingAdSense}
+                    className="px-3.5 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingAdSense ? 'animate-spin' : ''}`} /> Refresh Stats
+                  </button>
+                  <Link
+                    href="/ads.txt"
+                    target="_blank"
+                    className="px-3.5 py-2 text-xs font-semibold bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 rounded-xl transition-colors flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> View /ads.txt
+                  </Link>
+                </div>
+              </div>
+
+              {adSenseSavedMessage && (
+                <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{adSenseSavedMessage}</span>
+                </div>
+              )}
+
+              {/* 1. REVENUE METRICS CARDS */}
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> Revenue & Earnings Overview
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 relative overflow-hidden group hover:border-slate-700 transition-all">
+                    <div className="flex items-center justify-between text-xs text-slate-400 font-semibold mb-1">
+                      <span>Today's Estimated</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    </div>
+                    <div className="text-3xl font-black text-white font-mono">
+                      ${adAnalytics ? adAnalytics.earningsToday.toFixed(2) : '0.00'}
+                    </div>
+                    <p className="text-[11px] text-emerald-400 font-medium mt-1 flex items-center gap-1">
+                      RPM: ${adAnalytics ? adAnalytics.pageRpm.toFixed(2) : '0.00'}
+                    </p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all">
+                    <div className="text-xs text-slate-400 font-semibold mb-1">Yesterday's Earnings</div>
+                    <div className="text-3xl font-black text-slate-200 font-mono">
+                      ${adAnalytics ? adAnalytics.earningsYesterday.toFixed(2) : '0.00'}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">Previous 24 hours</p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all">
+                    <div className="text-xs text-slate-400 font-semibold mb-1">Last 7 Days</div>
+                    <div className="text-3xl font-black text-emerald-400 font-mono">
+                      ${adAnalytics ? adAnalytics.earningsLast7Days.toFixed(2) : '0.00'}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">Weekly ad revenue</p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all">
+                    <div className="text-xs text-slate-400 font-semibold mb-1">Last 28 Days (Monthly)</div>
+                    <div className="text-3xl font-black text-cyan-400 font-mono">
+                      ${adAnalytics ? adAnalytics.earningsLast28Days.toFixed(2) : '0.00'}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">Estimated payout cycle</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. AD PERFORMANCE METRICS */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Today's Impressions</div>
+                  <div className="text-xl font-bold text-white mt-1 font-mono">{adAnalytics?.impressionsToday.toLocaleString() || 0}</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Today's Clicks</div>
+                  <div className="text-xl font-bold text-emerald-400 mt-1 font-mono">{adAnalytics?.clicksToday || 0}</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Click-Through Rate (CTR)</div>
+                  <div className="text-xl font-bold text-amber-400 mt-1 font-mono">{adAnalytics?.ctr || 0}%</div>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-center">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Average Page RPM</div>
+                  <div className="text-xl font-bold text-purple-400 mt-1 font-mono">${adAnalytics?.pageRpm || '0.00'}</div>
+                </div>
+              </div>
+
+              {/* 3. VISUAL REVENUE & CLICKS TREND CHART */}
+              {adAnalytics && adAnalytics.dailyTrend.length > 0 && (
+                <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <BarChart3 className="w-4 h-4 text-emerald-400" /> Revenue & Clicks Performance Trend
+                      </h4>
+                      <p className="text-[11px] text-slate-400">Daily earnings in USD ($) and ad click volumes over time.</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setChartView('7d')}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all ${chartView === '7d' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        7 Days
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChartView('14d')}
+                        className={`px-3 py-1 rounded-lg font-bold transition-all ${chartView === '14d' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        14 Days
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SVG Bar Chart */}
+                  {(() => {
+                    const dataPoints = chartView === '7d' ? adAnalytics.dailyTrend.slice(-7) : adAnalytics.dailyTrend;
+                    const maxRevenue = Math.max(...dataPoints.map(d => d.revenue), 10);
+                    return (
+                      <div className="space-y-2">
+                        <div className="h-48 w-full flex items-end gap-2 sm:gap-4 pt-6 px-2">
+                          {dataPoints.map((dp, idx) => {
+                            const barHeightPercent = Math.max(12, Math.round((dp.revenue / maxRevenue) * 100));
+                            return (
+                              <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end group relative">
+                                {/* Hover Tooltip */}
+                                <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-950 text-white border border-slate-700 text-[10px] font-mono py-1 px-2 rounded-lg pointer-events-none whitespace-nowrap z-20 shadow-xl">
+                                  <div className="text-emerald-400 font-bold">${dp.revenue.toFixed(2)}</div>
+                                  <div className="text-slate-400">{dp.clicks} clicks • {dp.impressions} views</div>
+                                </div>
+
+                                <div
+                                  style={{ height: `${barHeightPercent}%` }}
+                                  className="w-full rounded-t-xl bg-gradient-to-t from-emerald-600/80 to-emerald-400 hover:from-emerald-500 hover:to-emerald-300 transition-all cursor-pointer relative shadow-lg shadow-emerald-950/40"
+                                >
+                                  <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                                    ${dp.revenue.toFixed(0)}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* Dates on X Axis */}
+                        <div className="flex gap-2 sm:gap-4 px-2 pt-2 border-t border-slate-800 text-[10px] text-slate-500 font-mono">
+                          {dataPoints.map((dp, idx) => (
+                            <div key={idx} className="flex-1 text-center truncate">
+                              {dp.date}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* 4. TOP PLACEMENTS BREAKDOWN */}
+              {adAnalytics && adAnalytics.placementsBreakdown.length > 0 && (
+                <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-emerald-400" /> Revenue by Ad Unit Placement
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400 text-[10px] uppercase tracking-wider">
+                          <th className="pb-3">Ad Unit Placement</th>
+                          <th className="pb-3">Impressions</th>
+                          <th className="pb-3">Clicks</th>
+                          <th className="pb-3">Revenue ($)</th>
+                          <th className="pb-3 text-right">Revenue Share</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {adAnalytics.placementsBreakdown.map((place, idx) => (
+                          <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-3 font-semibold text-white">{place.name}</td>
+                            <td className="py-3 text-slate-300 font-mono">{place.impressions.toLocaleString()}</td>
+                            <td className="py-3 text-emerald-400 font-mono">{place.clicks}</td>
+                            <td className="py-3 font-bold text-white font-mono">${place.revenue.toFixed(2)}</td>
+                            <td className="py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full"
+                                    style={{ width: `${place.percentage}%` }}
+                                  />
+                                </div>
+                                <span className="font-bold text-slate-300 w-8">{place.percentage}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* 5. CONFIGURATION & CONTROLS FORM */}
+              <form onSubmit={handleSaveAdSense} className="p-8 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-6">
+                <div className="border-b border-slate-800 pb-4">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-emerald-400" /> Google AdSense Dynamic Controls
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Toggle ads on or off, configure your Publisher ID, and manage slot IDs without editing code.
+                  </p>
+                </div>
+
+                {/* Master Switch & Mode Toggles */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  
+                  {/* Master AdSense Toggle */}
+                  <div className={`p-4 rounded-2xl border transition-all ${
+                    adConfig.enabled 
+                      ? 'bg-emerald-950/30 border-emerald-500/50 text-white' 
+                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wider">AdSense Status</span>
+                      <input
+                        type="checkbox"
+                        checked={adConfig.enabled}
+                        onChange={(e) => setAdConfig({ ...adConfig, enabled: e.target.checked })}
+                        className="w-5 h-5 accent-emerald-500 cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-xs font-semibold">{adConfig.enabled ? 'Enabled (Ads Active)' : 'Disabled (All Ads Hidden)'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Master switch to turn all website ads on or off instantly.</p>
+                  </div>
+
+                  {/* Auto Ads Toggle */}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Auto Ads</span>
+                      <input
+                        type="checkbox"
+                        checked={adConfig.autoAds}
+                        onChange={(e) => setAdConfig({ ...adConfig, autoAds: e.target.checked })}
+                        className="w-5 h-5 accent-emerald-500 cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-xs font-semibold text-white">{adConfig.autoAds ? 'Auto Ads Active' : 'Auto Ads Off'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Google AI automatically optimizes ad placement locations.</p>
+                  </div>
+
+                  {/* Test Mode Toggle */}
+                  <div className={`p-4 rounded-2xl border transition-all ${
+                    adConfig.testMode 
+                      ? 'bg-amber-950/20 border-amber-500/40 text-amber-300' 
+                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wider">Test / Preview Mode</span>
+                      <input
+                        type="checkbox"
+                        checked={adConfig.testMode}
+                        onChange={(e) => setAdConfig({ ...adConfig, testMode: e.target.checked })}
+                        className="w-5 h-5 accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-xs font-semibold">{adConfig.testMode ? 'Preview Mode Enabled' : 'Live Production Mode'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Displays preview banner boxes to test layouts before approval.</p>
+                  </div>
+
+                </div>
+
+                {/* Publisher ID Input */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Google AdSense Publisher ID (ca-pub-XXXXXXXXXXXXXXXX)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. ca-pub-1234567890123456"
+                    value={adConfig.publisherId}
+                    onChange={(e) => setAdConfig({ ...adConfig, publisherId: e.target.value.trim() })}
+                    className="w-full px-4 py-3 text-sm font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Find this in your Google AdSense dashboard under <span className="text-slate-300 font-semibold">Account &gt; Settings &gt; Account Information</span>.
+                  </p>
+                </div>
+
+                {/* Ad Slots Section */}
+                <div className="space-y-4 pt-2 border-t border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Individual Banner Slot IDs (Optional / Advanced)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Header Banner Slot ID (728 × 90)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1234567890"
+                        value={adConfig.slots.headerBanner}
+                        onChange={(e) => setAdConfig({ ...adConfig, slots: { ...adConfig.slots, headerBanner: e.target.value.trim() } })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Tool Result / Download Area Slot ID (Highest CTR)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 9876543210"
+                        value={adConfig.slots.toolResultBanner}
+                        onChange={(e) => setAdConfig({ ...adConfig, slots: { ...adConfig.slots, toolResultBanner: e.target.value.trim() } })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Tool Workspace Footer Slot ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 5432167890"
+                        value={adConfig.slots.toolBottomBanner}
+                        onChange={(e) => setAdConfig({ ...adConfig, slots: { ...adConfig.slots, toolBottomBanner: e.target.value.trim() } })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Blog Sidebar Ad Slot ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 6789012345"
+                        value={adConfig.slots.blogSidebarBanner}
+                        onChange={(e) => setAdConfig({ ...adConfig, slots: { ...adConfig.slots, blogSidebarBanner: e.target.value.trim() } })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* ads.txt Section */}
+                <div className="space-y-2 pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-300">
+                      ads.txt Record (Google Verification)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (adConfig.adsTxt) {
+                          navigator.clipboard.writeText(adConfig.adsTxt);
+                          setCopiedAdsTxt(true);
+                          setTimeout(() => setCopiedAdsTxt(false), 2500);
+                        }
+                      }}
+                      className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> {copiedAdsTxt ? 'Copied!' : 'Copy ads.txt'}
+                    </button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    placeholder="google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0"
+                    value={adConfig.adsTxt}
+                    onChange={(e) => setAdConfig({ ...adConfig, adsTxt: e.target.value })}
+                    className="w-full p-3 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-slate-300 focus:border-emerald-500 focus:outline-none"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Served live at <code className="text-emerald-400">/ads.txt</code> to verify site ownership for Google AdSense crawlers.
+                  </p>
+                </div>
+
+                {/* Submit Button */}
+                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-800">
+                  <button
+                    type="submit"
+                    disabled={savingAdSense}
+                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-600/25 flex items-center gap-2 transition-all disabled:opacity-50"
+                  >
+                    {savingAdSense ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" /> Saving Configuration...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" /> Save AdSense Settings
+                      </>
+                    )}
+                  </button>
+                </div>
+
+              </form>
+
             </div>
           )}
 
