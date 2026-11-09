@@ -1,6 +1,6 @@
 {
-  "enabled": false,
-  "publisherId": "",
+  "enabled": true,
+  "publisherId": "pub-2275978117553909",
   "autoAds": true,
   "testMode": true,
   "slots": {
@@ -9,6 +9,5 @@
     "toolBottomBanner": "",
     "blogSidebarBanner": ""
   },
-  "adsTxt": ""
+  "adsTxt": "google.com, pub-2275978117553909, DIRECT, f08c47fec0942fa0"
 }
-

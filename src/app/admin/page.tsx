@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { marked } from 'marked';
@@ -21,6 +21,7 @@ import {
   RefreshCw, 
   Database, 
   ShieldCheck, 
+  Cloud,
   LogOut,
   User,
   Settings,
@@ -36,7 +37,32 @@ import {
   Copy,
   ExternalLink,
   Layers,
-  Sliders
+  Sliders,
+  Image as ImageIcon,
+  Upload,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  Heading1,
+  Heading2,
+  Heading3,
+  List,
+  ListOrdered,
+  CheckSquare,
+  Quote,
+  Code,
+  Table as TableIcon,
+  Link as LinkIcon,
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  MoveLeft,
+  MoveRight,
+  Clock,
+  Columns,
+  X,
+  Calendar
 } from 'lucide-react';
 import type { AdSenseConfig, AdSenseAnalytics } from '@/types';
 
@@ -48,6 +74,8 @@ interface Post {
   content?: string;
   coverImage?: string | null;
   published: boolean;
+  scheduledAt?: string | null;
+  status?: 'published' | 'draft' | 'scheduled';
   featured: boolean;
   views: number;
   readingTime?: number;
@@ -117,6 +145,13 @@ export default function CentralAdminDashboard() {
       blogSidebarBanner: '',
     },
     adsTxt: '',
+    api: {
+      clientId: '',
+      clientSecret: '',
+      refreshToken: '',
+      accountId: '',
+    },
+    estimatedCpc: 0.25,
   });
   const [adAnalytics, setAdAnalytics] = useState<AdSenseAnalytics | null>(null);
   const [loadingAdSense, setLoadingAdSense] = useState(false);
@@ -139,10 +174,34 @@ export default function CentralAdminDashboard() {
   const [postContent, setPostContent] = useState('');
   const [postCover, setPostCover] = useState('');
   const [postPublished, setPostPublished] = useState(true);
+  const [postStatus, setPostStatus] = useState<'published' | 'draft' | 'scheduled'>('published');
+  const [postScheduledAt, setPostScheduledAt] = useState('');
   const [postMetaTitle, setPostMetaTitle] = useState('');
   const [postMetaDesc, setPostMetaDesc] = useState('');
   const [postKeywords, setPostKeywords] = useState('');
   const [savingPost, setSavingPost] = useState(false);
+
+  // Editor View & Image Modal States for Tab 3 (Write Article)
+  const [editorSubView, setEditorSubView] = useState<'write' | 'split' | 'preview'>('split');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Cover image upload states
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
+  const [showCoverUrlInput, setShowCoverUrlInput] = useState(false);
+  const coverFileInputRef = useRef<HTMLInputElement>(null);
+
+  // In-content image modal states
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [imageSourceMode, setImageSourceMode] = useState<'upload' | 'url'>('upload');
+  const [inContentImageUrl, setInContentImageUrl] = useState('');
+  const [inContentImageAlt, setInContentImageAlt] = useState('');
+  const [inContentImageCaption, setInContentImageCaption] = useState('');
+  const [inContentImageScale, setInContentImageScale] = useState<number>(50);
+  const [inContentImageDirection, setInContentImageDirection] = useState<'center' | 'left' | 'right' | 'float-left' | 'float-right'>('center');
+  const [uploadingInContent, setUploadingInContent] = useState(false);
+  const [inContentUploadError, setInContentUploadError] = useState<string | null>(null);
+  const contentImageInputRef = useRef<HTMLInputElement>(null);
 
   // Static Pages States
   const [staticPages, setStaticPages] = useState<StaticPage[]>(INITIAL_STATIC_PAGES);
@@ -205,7 +264,12 @@ export default function CentralAdminDashboard() {
   const fetchPosts = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/blog');
+      let res = await fetch('/api/admin/blog', {
+        headers: { 'x-admin-secret': getAdminSecret() },
+      });
+      if (!res.ok) {
+        res = await fetch('/api/blog');
+      }
       const data = await res.json();
       if (data.success) {
         setPosts(data.posts || []);
@@ -290,7 +354,24 @@ export default function CentralAdminDashboard() {
     setPostSummary(post.summary);
     setPostContent(post.content || '');
     setPostCover(post.coverImage || '');
+    
+    // Status & Schedule
+    const currentStatus = (post.status || (post.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled';
+    setPostStatus(currentStatus);
     setPostPublished(post.published);
+    if (post.scheduledAt) {
+      try {
+        const d = new Date(post.scheduledAt);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const localIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        setPostScheduledAt(localIso);
+      } catch {
+        setPostScheduledAt('');
+      }
+    } else {
+      setPostScheduledAt('');
+    }
+
     setPostMetaTitle(post.metaTitle || '');
     setPostMetaDesc(post.metaDescription || '');
     setPostKeywords(post.keywords || '');
@@ -304,11 +385,175 @@ export default function CentralAdminDashboard() {
     setPostSummary('');
     setPostContent('');
     setPostCover('');
+    setPostStatus('published');
     setPostPublished(true);
+    setPostScheduledAt('');
     setPostMetaTitle('');
     setPostMetaDesc('');
     setPostKeywords('');
     setActiveTab('editor');
+  };
+
+  // Helper to upload image to /api/admin/upload
+  const uploadImageToServer = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch('/api/admin/upload', {
+      method: 'POST',
+      headers: {
+        'x-admin-secret': getAdminSecret(),
+      },
+      body: formData,
+    });
+
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to upload image');
+    }
+    return data.url;
+  };
+
+  // Handle Cover Image Upload
+  const handleCoverFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingCover(true);
+    setCoverUploadError(null);
+
+    try {
+      const url = await uploadImageToServer(file);
+      setPostCover(url);
+    } catch (err: any) {
+      setCoverUploadError(err.message || 'Cover upload failed');
+    } finally {
+      setUploadingCover(false);
+      if (coverFileInputRef.current) coverFileInputRef.current.value = '';
+    }
+  };
+
+  // Handle In-Content Image Upload
+  const handleContentImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingInContent(true);
+    setInContentUploadError(null);
+
+    try {
+      const url = await uploadImageToServer(file);
+      setInContentImageUrl(url);
+      if (!inContentImageAlt) {
+        setInContentImageAlt(file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '));
+      }
+    } catch (err: any) {
+      setInContentUploadError(err.message || 'Image upload failed');
+    } finally {
+      setUploadingInContent(false);
+      if (contentImageInputRef.current) contentImageInputRef.current.value = '';
+    }
+  };
+
+  // Insert text / markdown wrapper at cursor in textarea
+  const insertAtCursor = (before: string, after: string = '') => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const currentVal = textarea.value;
+    const selectedText = currentVal.substring(start, end);
+
+    const replacement = before + (selectedText || '') + after;
+    const newVal = currentVal.substring(0, start) + replacement + currentVal.substring(end);
+    setPostContent(newVal);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + before.length, start + before.length + selectedText.length);
+    }, 0);
+  };
+
+  // Build HTML Snippet for Image insertion with chosen scale and direction
+  const generateImageHtml = (url: string, alt: string, caption: string, scale: number, direction: 'center' | 'left' | 'right' | 'float-left' | 'float-right') => {
+    const safeAlt = alt.trim() || 'Blog article image';
+    const safeCaption = caption.trim();
+
+    if (direction === 'float-left') {
+      return `\n<div style="float: left; margin: 0.5rem 1.5rem 1rem 0; width: ${scale}%; max-width: 100%;">\n  <img src="${url}" alt="${safeAlt}" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); display: block;" />\n  ${safeCaption ? `<p style="font-size: 0.8125rem; color: #94a3b8; margin-top: 0.35rem; text-align: center; font-style: italic;">${safeCaption}</p>` : ''}\n</div>\n`;
+    }
+
+    if (direction === 'float-right') {
+      return `\n<div style="float: right; margin: 0.5rem 0 1rem 1.5rem; width: ${scale}%; max-width: 100%;">\n  <img src="${url}" alt="${safeAlt}" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); display: block;" />\n  ${safeCaption ? `<p style="font-size: 0.8125rem; color: #94a3b8; margin-top: 0.35rem; text-align: center; font-style: italic;">${safeCaption}</p>` : ''}\n</div>\n`;
+    }
+
+    if (direction === 'left') {
+      return `\n<figure style="margin: 1.5rem 0; text-align: left; max-width: 100%;">\n  <img src="${url}" alt="${safeAlt}" style="display: inline-block; width: ${scale}%; max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);" />\n  ${safeCaption ? `<figcaption style="font-size: 0.8125rem; color: #94a3b8; margin-top: 0.5rem; text-align: left; font-style: italic;">${safeCaption}</figcaption>` : ''}\n</figure>\n`;
+    }
+
+    if (direction === 'right') {
+      return `\n<figure style="margin: 1.5rem 0; text-align: right; max-width: 100%;">\n  <img src="${url}" alt="${safeAlt}" style="display: inline-block; width: ${scale}%; max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);" />\n  ${safeCaption ? `<figcaption style="font-size: 0.8125rem; color: #94a3b8; margin-top: 0.5rem; text-align: right; font-style: italic;">${safeCaption}</figcaption>` : ''}\n</figure>\n`;
+    }
+
+    // Default 'center'
+    return `\n<figure style="margin: 1.5rem auto; text-align: center; max-width: 100%;">\n  <img src="${url}" alt="${safeAlt}" style="display: inline-block; width: ${scale}%; max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);" />\n  ${safeCaption ? `<figcaption style="font-size: 0.8125rem; color: #94a3b8; margin-top: 0.5rem; text-align: center; font-style: italic;">${safeCaption}</figcaption>` : ''}\n</figure>\n`;
+  };
+
+  // Insert configured image into editor
+  const handleInsertImageToEditor = () => {
+    if (!inContentImageUrl) {
+      alert('Please select or upload an image first!');
+      return;
+    }
+
+    const snippet = generateImageHtml(inContentImageUrl, inContentImageAlt, inContentImageCaption, inContentImageScale, inContentImageDirection);
+    insertAtCursor(snippet);
+
+    // Reset modal fields and close
+    setIsImageModalOpen(false);
+    setInContentImageUrl('');
+    setInContentImageAlt('');
+    setInContentImageCaption('');
+    setInContentImageScale(50);
+    setInContentImageDirection('center');
+  };
+
+  // Drag and Drop & Paste handling for editor textarea
+  const handleTextareaPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type.startsWith('image/')) {
+        e.preventDefault();
+        try {
+          const url = await uploadImageToServer(file);
+          setInContentImageUrl(url);
+          setInContentImageAlt(file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '));
+          setIsImageModalOpen(true);
+        } catch (err: any) {
+          alert('Failed to paste image: ' + err.message);
+        }
+      }
+    }
+  };
+
+  const handleTextareaDrop = async (e: React.DragEvent<HTMLTextAreaElement>) => {
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type.startsWith('image/')) {
+        e.preventDefault();
+        try {
+          const url = await uploadImageToServer(file);
+          setInContentImageUrl(url);
+          setInContentImageAlt(file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '));
+          setIsImageModalOpen(true);
+        } catch (err: any) {
+          alert('Failed to drop image: ' + err.message);
+        }
+      }
+    }
   };
 
   const handleSavePost = async (e: React.FormEvent) => {
@@ -318,7 +563,20 @@ export default function CentralAdminDashboard() {
       return;
     }
 
+    if (postStatus === 'scheduled' && !postScheduledAt) {
+      alert('Please choose a date and time to schedule this post!');
+      return;
+    }
+
     setSavingPost(true);
+
+    let isPublished = true;
+    if (postStatus === 'draft') {
+      isPublished = false;
+    } else if (postStatus === 'scheduled') {
+      isPublished = postScheduledAt ? new Date(postScheduledAt) <= new Date() : false;
+    }
+
     const payload = {
       id: editId || undefined,
       title: postTitle,
@@ -326,11 +584,13 @@ export default function CentralAdminDashboard() {
       summary: postSummary,
       content: postContent,
       coverImage: postCover || null,
-      published: postPublished,
-      metaTitle: postMetaTitle || `${postTitle} | tools726 Blog`,
+      status: postStatus,
+      scheduledAt: postStatus === 'scheduled' && postScheduledAt ? new Date(postScheduledAt).toISOString() : null,
+      published: isPublished,
+      metaTitle: postMetaTitle || `${postTitle} | Stackx Blog`,
       metaDescription: postMetaDesc || postSummary,
       keywords: postKeywords,
-      canonicalUrl: `http://localhost:3001/blog/${postSlug}`,
+      canonicalUrl: `https://stackx.si/blog/${postSlug}`,
     };
 
     try {
@@ -711,13 +971,22 @@ export default function CentralAdminDashboard() {
                           </td>
                           <td className="px-6 py-4 text-slate-400">{post.category?.name || 'General'}</td>
                           <td className="px-6 py-4">
-                            {post.published ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">
-                                <CheckCircle className="w-3 h-3" /> Published
+                            {post.status === 'scheduled' || (post.scheduledAt && new Date(post.scheduledAt) > new Date()) ? (
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-purple-400 bg-purple-950/60 px-2.5 py-1 rounded-md border border-purple-800/40">
+                                <Clock className="w-3 h-3 text-purple-400" /> Scheduled
+                                {post.scheduledAt && (
+                                  <span className="text-[9px] text-purple-300 font-mono opacity-80">
+                                    ({new Date(post.scheduledAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
+                                  </span>
+                                )}
+                              </span>
+                            ) : post.status === 'draft' || !post.published ? (
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-400 bg-amber-950/60 px-2.5 py-1 rounded-md border border-amber-800/40">
+                                <FileText className="w-3 h-3 text-amber-400" /> Draft
                               </span>
                             ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/40">
-                                <XCircle className="w-3 h-3" /> Draft
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-md border border-emerald-800/40">
+                                <CheckCircle className="w-3 h-3 text-emerald-400" /> Published
                               </span>
                             )}
                           </td>
@@ -748,101 +1017,619 @@ export default function CentralAdminDashboard() {
           {/* TAB 3: INTEGRATED ARTICLE EDITOR */}
           {activeTab === 'editor' && (
             <form onSubmit={handleSavePost} className="space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                <h2 className="text-xl font-bold text-white">
-                  {editId ? 'Edit Blog Article' : 'Create New Blog Article'}
-                </h2>
-                <button
-                  type="submit"
-                  disabled={savingPost}
-                  className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  <Save className="w-4 h-4" /> {savingPost ? 'Saving...' : editId ? 'Update Article' : 'Publish Article'}
-                </button>
+              {/* Header with Title, View Modes & Save Action */}
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <PenTool className="w-5 h-5 text-red-500" />
+                    {editId ? 'Edit Blog Article' : 'Create New Blog Article'}
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Write rich content with custom scaled & aligned images</p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {/* View Modes */}
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setEditorSubView('write')}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors ${editorSubView === 'write' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                      title="Write Mode"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Write</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorSubView('split')}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors ${editorSubView === 'split' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                      title="Side-by-Side Split View"
+                    >
+                      <Columns className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Split View</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorSubView('preview')}
+                      className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors ${editorSubView === 'preview' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                      title="Full Article Preview"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Preview</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingPost}
+                    className={`px-6 py-2.5 font-bold text-xs rounded-xl shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50 text-white ${
+                      postStatus === 'draft' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20' :
+                      postStatus === 'scheduled' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/20' :
+                      'bg-red-600 hover:bg-red-700 shadow-red-600/20'
+                    }`}
+                  >
+                    <Save className="w-4 h-4" /> {
+                      savingPost ? 'Saving...' : 
+                      postStatus === 'draft' ? (editId ? 'Update Draft' : 'Save Draft') :
+                      postStatus === 'scheduled' ? (editId ? 'Update Schedule' : 'Schedule Article') :
+                      editId ? 'Update Article' : 'Publish Article'
+                    }
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                <div className="lg:col-span-8 space-y-6">
-                  
-                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">Article Title *</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. How to Merge PDF Files Online Privately"
-                        value={postTitle}
-                        onChange={(e) => {
-                          setPostTitle(e.target.value);
-                          if (!editId) {
-                            setPostSlug(e.target.value.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-'));
-                          }
-                        }}
-                        className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold text-base focus:border-red-500 focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">URL Slug *</label>
-                      <input
-                        type="text"
-                        value={postSlug}
-                        onChange={(e) => setPostSlug(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:border-red-500 focus:outline-none"
-                      />
+              {/* Full Article Preview Mode */}
+              {editorSubView === 'preview' ? (
+                <div className="max-w-4xl mx-auto p-8 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl space-y-6">
+                  <div>
+                    <h1 className="text-3xl font-extrabold text-white">{postTitle || 'Untitled Post'}</h1>
+                    <div className="flex items-center gap-4 text-xs text-slate-400 mt-3">
+                      <span>By Stackx Editorial</span>
+                      <span>•</span>
+                      <span>{(postContent.trim().match(/\S+/g) || []).length} words</span>
                     </div>
                   </div>
 
-                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">Summary / Excerpt</label>
+                  {postCover && (
+                    <div className="rounded-2xl overflow-hidden border border-slate-800 shadow-xl max-h-96">
+                      <img src={postCover} alt="Cover preview" className="w-full h-full object-cover" />
+                    </div>
+                  )}
+
+                  <article
+                    className="blog-content prose prose-invert max-w-none text-slate-300 text-sm sm:text-base leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: marked.parse(postContent || '') as string }}
+                  />
+                </div>
+              ) : (
+                /* Standard Write & Split View */
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  
+                  {/* Left Column (8 cols): Title, Summary, Toolbar, Editor */}
+                  <div className="lg:col-span-8 space-y-6">
+                    
+                    {/* Title & Slug */}
+                    <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">Article Title *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. How to Merge PDF Files Online Privately"
+                          value={postTitle}
+                          onChange={(e) => {
+                            setPostTitle(e.target.value);
+                            if (!editId) {
+                              setPostSlug(e.target.value.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-'));
+                            }
+                          }}
+                          className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold text-base focus:border-red-500 focus:outline-none placeholder-slate-600"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">URL Slug *</label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500 font-mono hidden sm:inline">https://stackx.si/blog/</span>
+                          <input
+                            type="text"
+                            value={postSlug}
+                            onChange={(e) => setPostSlug(e.target.value)}
+                            className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:border-red-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Summary / Excerpt */}
+                    <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">Summary / Excerpt</label>
                       <textarea
                         rows={2}
+                        placeholder="Brief summary for listings & search results..."
                         value={postSummary}
                         onChange={(e) => setPostSummary(e.target.value)}
                         className="w-full px-4 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:border-red-500 focus:outline-none"
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">Markdown Content *</label>
-                      <textarea
-                        rows={14}
-                        value={postContent}
-                        onChange={(e) => setPostContent(e.target.value)}
-                        className="w-full p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs font-mono leading-relaxed focus:border-red-500 focus:outline-none"
-                      />
+                    {/* Rich Markdown Editor Card */}
+                    <div className="rounded-2xl bg-slate-900 border border-slate-800 shadow-xl overflow-hidden flex flex-col">
+                      
+                      {/* Modern Formatting Toolbar */}
+                      <div className="p-2.5 bg-slate-950/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1">
+                          
+                          {/* Headings */}
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('# ', '')}
+                            title="Heading 1"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Heading1 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('## ', '')}
+                            title="Heading 2"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Heading2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('### ', '')}
+                            title="Heading 3"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Heading3 className="w-4 h-4" />
+                          </button>
+
+                          <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+
+                          {/* Text Formats */}
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('**', '**')}
+                            title="Bold (**text**)"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Bold className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('*', '*')}
+                            title="Italic (*text*)"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Italic className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('<u>', '</u>')}
+                            title="Underline"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Underline className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('~~', '~~')}
+                            title="Strikethrough"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Strikethrough className="w-4 h-4" />
+                          </button>
+
+                          <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+
+                          {/* Lists & Quotes */}
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('- ', '')}
+                            title="Bullet List"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <List className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('1. ', '')}
+                            title="Numbered List"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <ListOrdered className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('- [ ] ', '')}
+                            title="Task List"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <CheckSquare className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('> ', '')}
+                            title="Blockquote"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Quote className="w-4 h-4" />
+                          </button>
+
+                          <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+
+                          {/* Code, Table, Link, Divider */}
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('`', '`')}
+                            title="Inline Code"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <Code className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('\n| Header 1 | Header 2 | Header 3 |\n| --- | --- | --- |\n| Row 1 | Data | Data |\n| Row 2 | Data | Data |\n', '')}
+                            title="Insert Table"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <TableIcon className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('[Link Text](https://', ')')}
+                            title="Insert Link"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            <LinkIcon className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertAtCursor('\n---\n', '')}
+                            title="Divider"
+                            className="px-2 py-1 rounded-lg text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                          >
+                            ―
+                          </button>
+                        </div>
+
+                        {/* ⭐ High-Converting Image Action Button ⭐ */}
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setIsImageModalOpen(true)}
+                            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-all active:scale-95"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>Insert Image (Scale & Align)</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Content Area (Split Mode or Write Mode) */}
+                      <div className={`grid ${editorSubView === 'split' ? 'grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800' : 'grid-cols-1'}`}>
+                        {/* Textarea */}
+                        <div className="p-4 flex flex-col">
+                          <textarea
+                            ref={textareaRef}
+                            rows={18}
+                            placeholder="Write your article in Markdown here...
+
+💡 Pro Tips:
+• Paste images directly from clipboard (Ctrl+V)
+• Drag & drop images directly onto this editor
+• Click 'Insert Image (Scale & Align)' to scale (25%, 50%, 75%, 100%) and choose direction (Center, Left, Right, Float Left, Float Right)!"
+                            value={postContent}
+                            onChange={(e) => setPostContent(e.target.value)}
+                            onPaste={handleTextareaPaste}
+                            onDrop={handleTextareaDrop}
+                            className="w-full h-full min-h-[420px] p-2 bg-transparent text-slate-100 text-xs sm:text-sm font-mono leading-relaxed focus:outline-none resize-y placeholder-slate-600"
+                          />
+                        </div>
+
+                        {/* Split View Live Preview */}
+                        {editorSubView === 'split' && (
+                          <div className="p-5 bg-slate-950/60 overflow-y-auto max-h-[520px]">
+                            <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500 mb-3 flex items-center gap-1.5 border-b border-slate-800/80 pb-2">
+                              <Eye className="w-3 h-3 text-red-400" /> Live Article Preview
+                            </div>
+                            <article
+                              className="blog-content prose prose-invert max-w-none text-slate-300 text-xs sm:text-sm leading-relaxed"
+                              dangerouslySetInnerHTML={{ __html: (marked.parse(postContent || '') as string) || '<p class="text-slate-600 italic">Live preview will appear here as you type...</p>' }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Editor Bottom Stats Bar */}
+                      <div className="px-4 py-2.5 bg-slate-950/80 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                        <div className="flex items-center gap-4">
+                          <span><strong>{(postContent.trim().match(/\S+/g) || []).length}</strong> words</span>
+                          <span><strong>{postContent.length}</strong> characters</span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-red-500" /> ~{Math.max(1, Math.ceil((postContent.trim().match(/\S+/g) || []).length / 200))} min read
+                          </span>
+                        </div>
+                        <div className="text-slate-500 hidden sm:block">
+                          Drag & drop or paste (Ctrl+V) images
+                        </div>
+                      </div>
+
                     </div>
+
+                    {/* SEO Preview & Meta Tags */}
+                    <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+                        <Search className="w-4 h-4 text-emerald-400" />
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Google SERP Snippet Preview</h3>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-white text-slate-900 shadow-md">
+                        <div className="text-[11px] text-[#202124] flex items-center gap-1.5 mb-1 font-sans">
+                          <span className="w-4 h-4 rounded-full bg-red-600 text-white font-black text-[9px] flex items-center justify-center">S</span>
+                          <span className="truncate">Stackx › blog › {postSlug || 'article-slug'}</span>
+                        </div>
+                        <div className="text-base text-[#1a0dab] font-normal hover:underline cursor-pointer truncate">
+                          {postMetaTitle || postTitle || 'Article Title - Stackx Blog'}
+                        </div>
+                        <div className="text-xs text-[#4d5156] mt-1 line-clamp-2 leading-relaxed font-sans">
+                          {postMetaDesc || postSummary || 'Your article description will appear here in Google search engine result snippets.'}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">SEO Title Tag</label>
+                          <input
+                            type="text"
+                            placeholder="Title tag for search engines..."
+                            value={postMetaTitle}
+                            onChange={(e) => setPostMetaTitle(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">Target Keywords</label>
+                          <input
+                            type="text"
+                            placeholder="merge pdf, pdf online, privacy..."
+                            value={postKeywords}
+                            onChange={(e) => setPostKeywords(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
                   </div>
 
-                </div>
-
-                <div className="lg:col-span-4 space-y-6">
-                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 pb-2">Publish Settings</h3>
+                  {/* Right Column (4 cols): Cover Image Upload & Publish Settings */}
+                  <div className="lg:col-span-4 space-y-6">
                     
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300">Published Status</span>
-                      <input
-                        type="checkbox"
-                        checked={postPublished}
-                        onChange={(e) => setPostPublished(e.target.checked)}
-                        className="w-4 h-4 accent-red-600 rounded cursor-pointer"
-                      />
+                    {/* Cover Image Upload Card */}
+                    <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                          <ImageIcon className="w-3.5 h-3.5 text-red-500" /> Cover Image
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => setShowCoverUrlInput(!showCoverUrlInput)}
+                          className="text-[11px] text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          {showCoverUrlInput ? 'Switch to Upload' : 'Enter URL instead'}
+                        </button>
+                      </div>
+
+                      {coverUploadError && (
+                        <div className="p-2 rounded-lg bg-red-950/60 border border-red-800 text-red-400 text-xs">
+                          {coverUploadError}
+                        </div>
+                      )}
+
+                      {/* If postCover exists, show preview */}
+                      {postCover ? (
+                        <div className="space-y-3">
+                          <div className="relative rounded-xl overflow-hidden border border-slate-800 group shadow-md">
+                            <img src={postCover} alt="Cover preview" className="w-full h-44 object-cover" />
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => coverFileInputRef.current?.click()}
+                                className="px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-semibold hover:bg-slate-700 transition-colors"
+                              >
+                                Replace
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPostCover('')}
+                                className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Remove
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate font-mono bg-slate-950 p-2 rounded-lg border border-slate-800">
+                            {postCover}
+                          </div>
+                        </div>
+                      ) : showCoverUrlInput ? (
+                        /* Manual URL Input */
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            placeholder="https://images.unsplash.com/photo-..."
+                            value={postCover}
+                            onChange={(e) => setPostCover(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                          />
+                          <p className="text-[11px] text-slate-500">Paste external CDN, S3, or Unsplash link.</p>
+                        </div>
+                      ) : (
+                        /* Direct Drag & Drop File Upload Zone */
+                        <div>
+                          <input
+                            ref={coverFileInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handleCoverFileUpload}
+                            className="hidden"
+                          />
+                          <div
+                            onClick={() => coverFileInputRef.current?.click()}
+                            className="border-2 border-dashed border-slate-700 hover:border-red-500 rounded-xl p-6 text-center cursor-pointer bg-slate-950/50 hover:bg-slate-950 transition-all group"
+                          >
+                            <div className="w-10 h-10 rounded-full bg-red-950/60 border border-red-800/60 flex items-center justify-center text-red-400 mx-auto mb-2 group-hover:scale-110 transition-transform">
+                              {uploadingCover ? (
+                                <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Upload className="w-5 h-5" />
+                              )}
+                            </div>
+                            <p className="text-xs font-semibold text-slate-200">
+                              {uploadingCover ? 'Uploading file...' : 'Upload Cover Image'}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-1">PNG, JPG, WEBP, or SVG up to 15MB</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Cover Image URL</label>
-                      <input
-                        type="text"
-                        placeholder="https://..."
-                        value={postCover}
-                        onChange={(e) => setPostCover(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white"
-                      />
+                    {/* Publishing Settings with Draft & Schedule */}
+                    <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-red-500" /> Publish Settings
+                        </h3>
+                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-md uppercase tracking-wider ${
+                          postStatus === 'published' ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40' :
+                          postStatus === 'scheduled' ? 'bg-purple-950/60 text-purple-400 border border-purple-800/40' :
+                          'bg-amber-950/60 text-amber-400 border border-amber-800/40'
+                        }`}>
+                          {postStatus}
+                        </span>
+                      </div>
+
+                      {/* 3 Status Choices: Publish Now, Draft, Schedule */}
+                      <div className="space-y-2">
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Status Selection</label>
+                        
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* Publish Now */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPostStatus('published');
+                              setPostPublished(true);
+                            }}
+                            className={`p-2.5 rounded-xl border text-center transition-all ${
+                              postStatus === 'published'
+                                ? 'bg-emerald-600/20 border-emerald-500 text-white shadow-sm'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                            }`}
+                          >
+                            <CheckCircle className={`w-4 h-4 mx-auto mb-1 ${postStatus === 'published' ? 'text-emerald-400' : 'text-slate-500'}`} />
+                            <div className="text-[11px] font-bold">Publish</div>
+                            <div className="text-[9px] text-slate-500">Live now</div>
+                          </button>
+
+                          {/* Draft */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPostStatus('draft');
+                              setPostPublished(false);
+                            }}
+                            className={`p-2.5 rounded-xl border text-center transition-all ${
+                              postStatus === 'draft'
+                                ? 'bg-amber-600/20 border-amber-500 text-white shadow-sm'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                            }`}
+                          >
+                            <FileText className={`w-4 h-4 mx-auto mb-1 ${postStatus === 'draft' ? 'text-amber-400' : 'text-slate-500'}`} />
+                            <div className="text-[11px] font-bold">Draft</div>
+                            <div className="text-[9px] text-slate-500">Hidden</div>
+                          </button>
+
+                          {/* Schedule */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPostStatus('scheduled');
+                              setPostPublished(false);
+                              if (!postScheduledAt) {
+                                const tomorrow = new Date(Date.now() + 86400000);
+                                const pad = (n: number) => String(n).padStart(2, '0');
+                                const localIso = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T${pad(tomorrow.getHours())}:${pad(tomorrow.getMinutes())}`;
+                                setPostScheduledAt(localIso);
+                              }
+                            }}
+                            className={`p-2.5 rounded-xl border text-center transition-all ${
+                              postStatus === 'scheduled'
+                                ? 'bg-purple-600/20 border-purple-500 text-white shadow-sm'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                            }`}
+                          >
+                            <Clock className={`w-4 h-4 mx-auto mb-1 ${postStatus === 'scheduled' ? 'text-purple-400' : 'text-slate-500'}`} />
+                            <div className="text-[11px] font-bold">Schedule</div>
+                            <div className="text-[9px] text-slate-500">Set Date</div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Scheduled Date & Time Picker */}
+                      {postStatus === 'scheduled' && (
+                        <div className="p-3.5 rounded-xl bg-purple-950/30 border border-purple-800/40 space-y-2 animate-in fade-in duration-150">
+                          <label className="block text-[11px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-purple-400" /> Auto-Publish Date & Time *
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              type="datetime-local"
+                              value={postScheduledAt}
+                              onChange={(e) => setPostScheduledAt(e.target.value)}
+                              min={new Date().toISOString().slice(0, 16)}
+                              style={{ colorScheme: 'dark' }}
+                              onClick={(e) => {
+                                try {
+                                  // @ts-ignore
+                                  if (typeof e.currentTarget.showPicker === 'function') {
+                                    // @ts-ignore
+                                    e.currentTarget.showPicker();
+                                  }
+                                } catch {}
+                              }}
+                              className="admin-calendar-input w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-950 border border-purple-500/60 text-white text-xs font-mono focus:border-purple-400 focus:outline-none cursor-pointer"
+                            />
+                            <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center text-white">
+                              <Calendar className="w-4 h-4 text-white" style={{ color: '#ffffff' }} />
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-purple-300/80 leading-relaxed">
+                            📅 This post will automatically go live on <strong>{postScheduledAt ? new Date(postScheduledAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : 'selected time'}</strong>. It will remain hidden from visitors until then.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Draft Status Explainer */}
+                      {postStatus === 'draft' && (
+                        <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/40 text-amber-300 text-xs flex items-center gap-2">
+                          <FileText className="w-4 h-4 shrink-0 text-amber-400" />
+                          <span>Drafts are saved privately and will not be visible to public visitors.</span>
+                        </div>
+                      )}
+
+                      {/* Published Status Explainer */}
+                      {postStatus === 'published' && (
+                        <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 text-xs flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+                          <span>Upon saving, this article will immediately be live on <strong>stackx.si/blog</strong>.</span>
+                        </div>
+                      )}
                     </div>
+
                   </div>
+
                 </div>
-              </div>
+              )}
             </form>
           )}
 
@@ -925,7 +1712,7 @@ export default function CentralAdminDashboard() {
               {/* Header with Live Status */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
                 <div>
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2.5">
                     <h2 className="text-xl font-bold text-white flex items-center gap-2">
                       <DollarSign className="w-5 h-5 text-emerald-400" /> Google AdSense & Revenue Dashboard
                     </h2>
@@ -936,13 +1723,28 @@ export default function CentralAdminDashboard() {
                     }`}>
                       {adConfig.enabled && adConfig.publisherId ? '● Live & Active' : '● Setup Required'}
                     </span>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                      adAnalytics?.isGoogleConnected
+                        ? 'bg-emerald-950/80 border-emerald-800 text-emerald-300'
+                        : 'bg-blue-950/80 border-blue-800 text-blue-300'
+                    }`}>
+                      {adAnalytics?.isGoogleConnected ? '● Google API Synced' : '● Real Traffic Tracker (Zero Dummy)'}
+                    </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-1">
                     Manage your Google AdSense Publisher ID, inspect live revenue/clicks, and control banner placements.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <a
+                    href={adConfig.publisherId ? `https://www.google.com/adsense/new/u/0/${adConfig.publisherId.replace(/^ca-/, '')}/home` : 'https://www.google.com/adsense'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 text-xs font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl transition-all shadow-md flex items-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Official Google Console ↗
+                  </a>
                   <button
                     onClick={fetchAdSense}
                     disabled={loadingAdSense}
@@ -957,6 +1759,29 @@ export default function CentralAdminDashboard() {
                   >
                     <ExternalLink className="w-3.5 h-3.5" /> View /ads.txt
                   </Link>
+                </div>
+              </div>
+
+              {/* Real Data Transparency Notice */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 to-blue-950/30 border border-blue-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 shrink-0">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-white flex items-center gap-2">
+                      100% Real Data Mode Active
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
+                        Zero Dummy Numbers
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      All metrics below reflect genuine visitor impressions and clicks recorded on <strong>stackx.si</strong>. Dummy generated numbers have been removed.
+                    </p>
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-400 shrink-0 font-mono">
+                  Source: <span className="text-white font-semibold">{adAnalytics?.isGoogleConnected ? 'Google AdSense API' : 'Real Visitor Events (MySQL)'}</span>
                 </div>
               </div>
 
@@ -1324,6 +2149,93 @@ export default function CentralAdminDashboard() {
                   </p>
                 </div>
 
+                {/* Google Cloud API Integration (Optional Direct Sync) */}
+                <div className="space-y-4 pt-4 border-t border-slate-800">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+                        <Cloud className="w-4 h-4" /> Google AdSense API Sync (Direct Official Sync)
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Optional: Connect your Google Cloud OAuth2 credentials to pull official revenue reports directly from Google servers.
+                      </p>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded self-start border ${
+                      adConfig.api?.refreshToken ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-500'
+                    }`}>
+                      {adConfig.api?.refreshToken ? '✓ Google API Connected' : 'Local Traffic Tracking'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Google Cloud OAuth Client ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 123456789-xxx.apps.googleusercontent.com"
+                        value={adConfig.api?.clientId || ''}
+                        onChange={(e) => setAdConfig({
+                          ...adConfig,
+                          api: { ...(adConfig.api || {}), clientId: e.target.value.trim() },
+                        })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Google Cloud Client Secret
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••••••••••••••••••••"
+                        value={adConfig.api?.clientSecret || ''}
+                        onChange={(e) => setAdConfig({
+                          ...adConfig,
+                          api: { ...(adConfig.api || {}), clientSecret: e.target.value.trim() },
+                        })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Google OAuth Refresh Token
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="1//04xxxxxxxxxxxxxxxxxxxxxxx"
+                        value={adConfig.api?.refreshToken || ''}
+                        onChange={(e) => setAdConfig({
+                          ...adConfig,
+                          api: { ...(adConfig.api || {}), refreshToken: e.target.value.trim() },
+                        })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">
+                        Local Estimated Value Per Click (USD)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        placeholder="0.25"
+                        value={adConfig.estimatedCpc || 0.25}
+                        onChange={(e) => setAdConfig({
+                          ...adConfig,
+                          estimatedCpc: parseFloat(e.target.value) || 0.25,
+                        })}
+                        className="w-full px-3.5 py-2 text-xs font-mono rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Submit Button */}
                 <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-800">
                   <button
@@ -1376,6 +2288,327 @@ export default function CentralAdminDashboard() {
 
         </div>
       </main>
+
+      {/* ⭐ IN-CONTENT IMAGE INSERTER MODAL (SCALE & DIRECTION) ⭐ */}
+      {isImageModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-red-600/20 border border-red-500/40 flex items-center justify-center text-red-500">
+                  <ImageIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Insert & Format Image</h3>
+                  <p className="text-[11px] text-slate-400">Scale dimensions and set alignment / text wrapping</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsImageModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+              
+              {/* Image Source Mode Tabs */}
+              <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setImageSourceMode('upload')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${imageSourceMode === 'upload' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Upload className="w-3.5 h-3.5" /> Upload File
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageSourceMode('url')}
+                  className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-colors ${imageSourceMode === 'url' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Globe className="w-3.5 h-3.5" /> Image URL
+                </button>
+              </div>
+
+              {inContentUploadError && (
+                <div className="p-3 rounded-xl bg-red-950/60 border border-red-800 text-red-400 text-xs">
+                  {inContentUploadError}
+                </div>
+              )}
+
+              {/* Source Input Area */}
+              {imageSourceMode === 'upload' ? (
+                <div>
+                  <input
+                    ref={contentImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleContentImageUpload}
+                    className="hidden"
+                  />
+                  <div
+                    onClick={() => contentImageInputRef.current?.click()}
+                    className="border-2 border-dashed border-slate-700 hover:border-red-500 rounded-2xl p-6 text-center cursor-pointer bg-slate-950/60 hover:bg-slate-950 transition-all group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-red-950/60 border border-red-800/60 flex items-center justify-center text-red-400 mx-auto mb-2 group-hover:scale-110 transition-transform">
+                      {uploadingInContent ? (
+                        <div className="w-5 h-5 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Upload className="w-6 h-6" />
+                      )}
+                    </div>
+                    <p className="text-xs font-semibold text-slate-200">
+                      {uploadingInContent ? 'Uploading image...' : inContentImageUrl ? 'Click to replace uploaded file' : 'Click to select or drag & drop image'}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1">PNG, JPG, WEBP, SVG or GIF</p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Image URL *</label>
+                  <input
+                    type="text"
+                    placeholder="https://example.com/image.jpg"
+                    value={inContentImageUrl}
+                    onChange={(e) => setInContentImageUrl(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Alt Text & Caption */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Alt Text (SEO & Accessibility)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., PDF to Word converter interface"
+                    value={inContentImageAlt}
+                    onChange={(e) => setInContentImageAlt(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Caption (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g., Step 1: Uploading documents"
+                    value={inContentImageCaption}
+                    onChange={(e) => setInContentImageCaption(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-red-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* ⭐ Image Scale Selector ⭐ */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-red-500" /> Image Scale / Size ({inContentImageScale}%)
+                  </label>
+                  <span className="text-[11px] text-slate-500">
+                    {inContentImageScale <= 30 ? 'Small (Thumbnail)' : inContentImageScale <= 60 ? 'Medium (Standard)' : inContentImageScale <= 85 ? 'Large (Prominent)' : 'Full Width (100%)'}
+                  </span>
+                </div>
+
+                {/* Preset Scale Buttons */}
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { label: 'Small', pct: 25 },
+                    { label: 'Medium', pct: 50 },
+                    { label: 'Large', pct: 75 },
+                    { label: 'Full (100%)', pct: 100 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.pct}
+                      type="button"
+                      onClick={() => setInContentImageScale(preset.pct)}
+                      className={`py-2 px-3 rounded-xl border text-xs font-semibold transition-all ${
+                        inContentImageScale === preset.pct
+                          ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                      }`}
+                    >
+                      {preset.label} <span className="text-[10px] opacity-75">({preset.pct}%)</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Range Slider for custom scale */}
+                <div className="pt-2 flex items-center gap-3">
+                  <span className="text-[10px] text-slate-500">15%</span>
+                  <input
+                    type="range"
+                    min="15"
+                    max="100"
+                    step="5"
+                    value={inContentImageScale}
+                    onChange={(e) => setInContentImageScale(Number(e.target.value))}
+                    className="flex-1 accent-red-600 cursor-pointer"
+                  />
+                  <span className="text-[10px] text-slate-500">100%</span>
+                </div>
+              </div>
+
+              {/* ⭐ Image Direction / Alignment ⭐ */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Image Direction & Text Wrap
+                </label>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {/* Center */}
+                  <button
+                    type="button"
+                    onClick={() => setInContentImageDirection('center')}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      inContentImageDirection === 'center'
+                        ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <AlignCenter className="w-4 h-4 mx-auto mb-1 text-red-400" />
+                    <div className="text-[11px] font-bold">Center</div>
+                    <div className="text-[9px] text-slate-500">Standard Block</div>
+                  </button>
+
+                  {/* Left */}
+                  <button
+                    type="button"
+                    onClick={() => setInContentImageDirection('left')}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      inContentImageDirection === 'left'
+                        ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <AlignLeft className="w-4 h-4 mx-auto mb-1 text-red-400" />
+                    <div className="text-[11px] font-bold">Left</div>
+                    <div className="text-[9px] text-slate-500">Block Left</div>
+                  </button>
+
+                  {/* Right */}
+                  <button
+                    type="button"
+                    onClick={() => setInContentImageDirection('right')}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      inContentImageDirection === 'right'
+                        ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <AlignRight className="w-4 h-4 mx-auto mb-1 text-red-400" />
+                    <div className="text-[11px] font-bold">Right</div>
+                    <div className="text-[9px] text-slate-500">Block Right</div>
+                  </button>
+
+                  {/* Float Left */}
+                  <button
+                    type="button"
+                    onClick={() => setInContentImageDirection('float-left')}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      inContentImageDirection === 'float-left'
+                        ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <MoveLeft className="w-4 h-4 mx-auto mb-1 text-emerald-400" />
+                    <div className="text-[11px] font-bold">Float Left</div>
+                    <div className="text-[9px] text-slate-500">Text on Right</div>
+                  </button>
+
+                  {/* Float Right */}
+                  <button
+                    type="button"
+                    onClick={() => setInContentImageDirection('float-right')}
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      inContentImageDirection === 'float-right'
+                        ? 'bg-red-600/20 border-red-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <MoveRight className="w-4 h-4 mx-auto mb-1 text-emerald-400" />
+                    <div className="text-[11px] font-bold">Float Right</div>
+                    <div className="text-[9px] text-slate-500">Text on Left</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Interactive Preview Box in Modal */}
+              {inContentImageUrl && (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                    <Eye className="w-3 h-3 text-red-400" /> Live Simulation Preview
+                  </div>
+                  
+                  <div className="p-4 rounded-xl bg-slate-900 border border-slate-800/80 overflow-hidden text-xs text-slate-400 leading-relaxed font-sans">
+                    {inContentImageDirection === 'float-left' ? (
+                      <div>
+                        <div style={{ float: 'left', margin: '0 1rem 0.5rem 0', width: `${inContentImageScale}%`, maxWidth: '100%' }}>
+                          <img src={inContentImageUrl} alt={inContentImageAlt} className="rounded-lg w-full h-auto object-cover" />
+                          {inContentImageCaption && <p className="text-[10px] text-slate-500 text-center italic mt-1">{inContentImageCaption}</p>}
+                        </div>
+                        <p>
+                          This sample paragraph shows how your article text flows seamlessly around the image. With <strong>Float Left</strong>, the image sits on the left side and your reader's text naturally wraps to its right.
+                        </p>
+                        <div style={{ clear: 'both' }} />
+                      </div>
+                    ) : inContentImageDirection === 'float-right' ? (
+                      <div>
+                        <div style={{ float: 'right', margin: '0 0 0.5rem 1rem', width: `${inContentImageScale}%`, maxWidth: '100%' }}>
+                          <img src={inContentImageUrl} alt={inContentImageAlt} className="rounded-lg w-full h-auto object-cover" />
+                          {inContentImageCaption && <p className="text-[10px] text-slate-500 text-center italic mt-1">{inContentImageCaption}</p>}
+                        </div>
+                        <p>
+                          This sample paragraph shows how your article text flows seamlessly around the image. With <strong>Float Right</strong>, the image sits on the right side and your reader's text naturally wraps to its left.
+                        </p>
+                        <div style={{ clear: 'both' }} />
+                      </div>
+                    ) : (
+                      <div className={`text-${inContentImageDirection}`}>
+                        <div style={{ display: 'inline-block', width: `${inContentImageScale}%`, maxWidth: '100%' }}>
+                          <img src={inContentImageUrl} alt={inContentImageAlt} className="rounded-lg w-full h-auto object-cover" />
+                          {inContentImageCaption && <p className="text-[10px] text-slate-500 text-center italic mt-1">{inContentImageCaption}</p>}
+                        </div>
+                        <p className="text-left mt-2">
+                          Standard paragraph text follows underneath the centered or aligned block figure.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsImageModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleInsertImageToEditor}
+                disabled={!inContentImageUrl}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> Insert into Article
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
 
     </div>
   );

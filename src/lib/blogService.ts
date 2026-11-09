@@ -8,6 +8,8 @@ export interface BlogPostItem {
   content: string;
   coverImage: string | null;
   published: boolean;
+  scheduledAt?: string | null;
+  status?: 'published' | 'draft' | 'scheduled';
   featured: boolean;
   views: number;
   readingTime: number;
@@ -197,8 +199,14 @@ export async function getAllCategories(): Promise<BlogCategoryItem[]> {
 }
 
 export async function getPublishedPosts(query?: string, categorySlug?: string): Promise<BlogPostItem[]> {
+  const now = new Date();
   try {
-    const where: any = { published: true };
+    const where: any = {
+      OR: [
+        { status: 'published', published: true },
+        { status: 'scheduled', scheduledAt: { lte: now } },
+      ],
+    };
     if (categorySlug) {
       where.category = { slug: categorySlug };
     }
@@ -212,6 +220,8 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
     if (posts.length > 0) {
       let filtered = posts.map((p: any) => ({
         ...p,
+        scheduledAt: p.scheduledAt ? p.scheduledAt.toISOString() : null,
+        status: (p.status || (p.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled',
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
       }));
@@ -226,7 +236,13 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
     // Database fallback
   }
 
-  let posts = inMemoryPosts.filter((p: BlogPostItem) => p.published);
+  let posts = inMemoryPosts.filter((p: BlogPostItem) => {
+    if (p.status === 'draft') return false;
+    if (p.status === 'scheduled') {
+      return p.scheduledAt ? new Date(p.scheduledAt) <= now : false;
+    }
+    return p.published;
+  });
   if (categorySlug) {
     posts = posts.filter((p: BlogPostItem) => p.category?.slug === categorySlug);
   }
@@ -237,7 +253,31 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
   return posts;
 }
 
+export async function getAllPostsAdmin(): Promise<BlogPostItem[]> {
+  try {
+    const posts = await db.blogPost.findMany({
+      include: { category: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (posts.length > 0) {
+      return posts.map((p: any) => ({
+        ...p,
+        scheduledAt: p.scheduledAt ? p.scheduledAt.toISOString() : null,
+        status: (p.status || (p.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled',
+        createdAt: p.createdAt.toISOString(),
+        updatedAt: p.updatedAt.toISOString(),
+      }));
+    }
+  } catch (err) {
+    // Database fallback
+  }
+
+  return inMemoryPosts;
+}
+
 export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> {
+  const now = new Date();
   try {
     const post = await db.blogPost.findUnique({
       where: { slug },
@@ -245,6 +285,11 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
     });
 
     if (post) {
+      // If draft, do not display publicly
+      if (post.status === 'draft' || !post.published) return null;
+      // If scheduled in the future, do not display publicly yet
+      if (post.status === 'scheduled' && post.scheduledAt && post.scheduledAt > now) return null;
+
       // Increment views count async
       db.blogPost.update({
         where: { id: post.id },
@@ -253,6 +298,8 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
 
       return {
         ...post,
+        scheduledAt: post.scheduledAt ? post.scheduledAt.toISOString() : null,
+        status: (post.status || (post.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled',
         createdAt: post.createdAt.toISOString(),
         updatedAt: post.updatedAt.toISOString(),
       };
@@ -263,6 +310,8 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
 
   const found = inMemoryPosts.find((p: BlogPostItem) => p.slug === slug);
   if (found) {
+    if (found.status === 'draft' || !found.published) return null;
+    if (found.status === 'scheduled' && found.scheduledAt && new Date(found.scheduledAt) > now) return null;
     found.views += 1;
     return found;
   }
@@ -271,7 +320,21 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
 
 export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt' | 'updatedAt' | 'views'>): Promise<BlogPostItem> {
   const newId = `post-${Date.now()}`;
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  // Determine published boolean based on status
+  let isPublished = data.published ?? true;
+  const status = data.status || (isPublished ? 'published' : 'draft');
+  if (status === 'draft') {
+    isPublished = false;
+  } else if (status === 'scheduled') {
+    isPublished = data.scheduledAt ? new Date(data.scheduledAt) <= now : false;
+  } else if (status === 'published') {
+    isPublished = true;
+  }
+
+  const scheduledAtDate = data.scheduledAt ? new Date(data.scheduledAt) : null;
 
   try {
     const created = await db.blogPost.create({
@@ -281,7 +344,9 @@ export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt'
         summary: data.summary,
         content: data.content,
         coverImage: data.coverImage,
-        published: data.published,
+        published: isPublished,
+        scheduledAt: scheduledAtDate,
+        status,
         featured: data.featured,
         readingTime: data.readingTime || 3,
         metaTitle: data.metaTitle,
@@ -297,6 +362,8 @@ export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt'
 
     return {
       ...created,
+      scheduledAt: created.scheduledAt ? created.scheduledAt.toISOString() : null,
+      status: created.status as 'published' | 'draft' | 'scheduled',
       createdAt: created.createdAt.toISOString(),
       updatedAt: created.updatedAt.toISOString(),
     };
@@ -306,9 +373,12 @@ export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt'
     const newPost: BlogPostItem = {
       ...data,
       id: newId,
+      published: isPublished,
+      scheduledAt: data.scheduledAt || null,
+      status,
       views: 0,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: nowIso,
+      updatedAt: nowIso,
       category,
     };
     inMemoryPosts.unshift(newPost);
@@ -317,36 +387,68 @@ export async function createBlogPost(data: Omit<BlogPostItem, 'id' | 'createdAt'
 }
 
 export async function updateBlogPost(id: string, data: Partial<BlogPostItem>): Promise<BlogPostItem | null> {
+  const now = new Date();
+  let isPublished = data.published;
+  if (data.status) {
+    if (data.status === 'draft') {
+      isPublished = false;
+    } else if (data.status === 'scheduled') {
+      isPublished = data.scheduledAt ? new Date(data.scheduledAt) <= now : false;
+    } else if (data.status === 'published') {
+      isPublished = true;
+    }
+  }
+
+  const updateData: any = {
+    title: data.title,
+    slug: data.slug,
+    summary: data.summary,
+    content: data.content,
+    coverImage: data.coverImage,
+    featured: data.featured,
+    metaTitle: data.metaTitle,
+    metaDescription: data.metaDescription,
+    keywords: data.keywords,
+    canonicalUrl: data.canonicalUrl,
+    authorName: data.authorName,
+    categoryId: data.categoryId,
+  };
+
+  if (isPublished !== undefined) {
+    updateData.published = isPublished;
+  }
+  if (data.status !== undefined) {
+    updateData.status = data.status;
+  }
+  if (data.scheduledAt !== undefined) {
+    updateData.scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
+  }
+
   try {
     const updated = await db.blogPost.update({
       where: { id },
-      data: {
-        title: data.title,
-        slug: data.slug,
-        summary: data.summary,
-        content: data.content,
-        coverImage: data.coverImage,
-        published: data.published,
-        featured: data.featured,
-        metaTitle: data.metaTitle,
-        metaDescription: data.metaDescription,
-        keywords: data.keywords,
-        canonicalUrl: data.canonicalUrl,
-        authorName: data.authorName,
-        categoryId: data.categoryId,
-      },
+      data: updateData,
       include: { category: true },
     });
 
     return {
       ...updated,
+      scheduledAt: updated.scheduledAt ? updated.scheduledAt.toISOString() : null,
+      status: updated.status as 'published' | 'draft' | 'scheduled',
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
     };
   } catch (err) {
     const idx = inMemoryPosts.findIndex((p: BlogPostItem) => p.id === id);
     if (idx !== -1) {
-      inMemoryPosts[idx] = { ...inMemoryPosts[idx], ...data, updatedAt: new Date().toISOString() };
+      inMemoryPosts[idx] = { 
+        ...inMemoryPosts[idx], 
+        ...data, 
+        published: isPublished !== undefined ? isPublished : inMemoryPosts[idx].published,
+        status: (data.status || inMemoryPosts[idx].status) as 'published' | 'draft' | 'scheduled',
+        scheduledAt: data.scheduledAt !== undefined ? data.scheduledAt : inMemoryPosts[idx].scheduledAt,
+        updatedAt: new Date().toISOString() 
+      };
       return inMemoryPosts[idx];
     }
   }

@@ -110,3 +110,63 @@
   .ReactCrop .ord-n, .ReactCrop .ord-e, .ReactCrop .ord-s, .ReactCrop .ord-w { display: none; }
   .ReactCrop__drag-handle { width: var(--rc-drag-handle-mobile-size); height: var(--rc-drag-handle-mobile-size); }
 }
+
+/* Blog Article Images, Scaling & Direction */
+.blog-content {
+  overflow-wrap: break-word;
+}
+.blog-content::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+.blog-content figure {
+  margin: 1.5rem 0;
+  max-width: 100%;
+}
+.blog-content img {
+  border-radius: 0.75rem;
+  max-width: 100%;
+  height: auto;
+}
+.blog-content figcaption {
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  margin-top: 0.5rem;
+  font-style: italic;
+  text-align: center;
+}
+@media (max-width: 640px) {
+  .blog-content .float-left,
+  .blog-content .float-right,
+  .blog-content [style*="float: left"],
+  .blog-content [style*="float: right"] {
+    float: none !important;
+    width: 100% !important;
+    margin: 1rem 0 !important;
+  }
+}
+
+/* Date & Time Picker Calendar Icon Styling */
+input[type="datetime-local"],
+input[type="date"] {
+  color-scheme: dark;
+}
+
+/* Ensure admin date/time picker has clean, clickable overlay and pure white Lucide icon */
+.admin-calendar-input {
+  position: relative;
+}
+.admin-calendar-input::-webkit-calendar-picker-indicator {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  opacity: 0 !important;
+  cursor: pointer !important;
+}
+
+

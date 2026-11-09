@@ -14,6 +14,8 @@ model BlogPost {
   content         String    @db.Text
   coverImage      String?
   published       Boolean   @default(true)
+  scheduledAt     DateTime?
+  status          String    @default("published")
   featured        Boolean   @default(false)
   views           Int       @default(0)
   readingTime     Int       @default(3)
@@ -45,4 +47,18 @@ model Tag {
   id   String @id @default(cuid())
   name String @unique
   slug String @unique
+}
+
+model AdMetric {
+  id          String   @id @default(cuid())
+  date        String   // "YYYY-MM-DD"
+  placement   String   // "headerBanner", "toolResultBanner", "toolBottomBanner", "blogSidebarBanner", "autoAds"
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  revenue     Float    @default(0.0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([date, placement])
+  @@index([date])
 }

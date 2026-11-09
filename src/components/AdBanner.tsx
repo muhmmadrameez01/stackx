@@ -35,8 +35,23 @@ export const AdBanner: React.FC<AdBannerProps> = ({ placement, className = '' })
     };
   }, []);
 
+  const trackedImpressionRef = useRef(false);
+
   useEffect(() => {
     if (!config?.enabled || !config?.publisherId) return;
+
+    // Track real visitor impression once per mount
+    if (!trackedImpressionRef.current) {
+      trackedImpressionRef.current = true;
+      try {
+        fetch('/api/adsense/track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ placement, type: 'impression' }),
+        }).catch(() => {});
+      } catch {}
+    }
+
     if (config.testMode) return; // Do not call push in test mode placeholder
 
     // Initialize adsbygoogle
@@ -48,7 +63,17 @@ export const AdBanner: React.FC<AdBannerProps> = ({ placement, className = '' })
         console.warn('AdSense push error:', e);
       }
     }
-  }, [config]);
+  }, [config, placement]);
+
+  const handleAdClick = () => {
+    try {
+      fetch('/api/adsense/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ placement, type: 'click' }),
+      }).catch(() => {});
+    } catch {}
+  };
 
   if (loading) {
     return null;
@@ -90,7 +115,8 @@ export const AdBanner: React.FC<AdBannerProps> = ({ placement, className = '' })
   if (config?.testMode || !config?.enabled || !config?.publisherId) {
     return (
       <div
-        className={`w-full my-4 p-4 rounded-2xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 dark:bg-amber-950/20 text-center flex flex-col items-center justify-center transition-all ${placementMeta.minHeight} ${className}`}
+        onClick={handleAdClick}
+        className={`w-full my-4 p-4 rounded-2xl border-2 border-dashed border-amber-500/40 bg-amber-500/5 dark:bg-amber-950/20 text-center flex flex-col items-center justify-center transition-all cursor-pointer ${placementMeta.minHeight} ${className}`}
       >
         <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-extrabold text-xs uppercase tracking-wider mb-1">
           <DollarSign className="w-4 h-4" />
@@ -108,7 +134,10 @@ export const AdBanner: React.FC<AdBannerProps> = ({ placement, className = '' })
 
   // Real AdSense Unit
   return (
-    <div className={`w-full my-4 overflow-hidden text-center flex justify-center items-center ${placementMeta.minHeight} ${className}`}>
+    <div 
+      onClick={handleAdClick}
+      className={`w-full my-4 overflow-hidden text-center flex justify-center items-center ${placementMeta.minHeight} ${className}`}
+    >
       <ins
         ref={adRef}
         className="adsbygoogle"

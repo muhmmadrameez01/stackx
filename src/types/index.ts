@@ -150,6 +150,14 @@ export interface AdSenseSlots {
   blogSidebarBanner: string;
 }
 
+export interface AdSenseApiConfig {
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  accountId?: string;
+  lastSyncedAt?: string;
+}
+
 export interface AdSenseConfig {
   enabled: boolean;
   publisherId: string;
@@ -157,6 +165,8 @@ export interface AdSenseConfig {
   testMode: boolean;
   slots: AdSenseSlots;
   adsTxt: string;
+  api?: AdSenseApiConfig;
+  estimatedCpc?: number;
 }
 
 export interface AdSenseAnalytics {
@@ -168,6 +178,9 @@ export interface AdSenseAnalytics {
   clicksToday: number;
   pageRpm: number;
   ctr: number;
+  dataSource: 'google_api' | 'real_traffic';
+  isGoogleConnected: boolean;
+  lastSyncedAt?: string;
   dailyTrend: {
     date: string;
     revenue: number;

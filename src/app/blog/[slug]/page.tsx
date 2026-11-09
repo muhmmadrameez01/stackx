@@ -211,7 +211,7 @@ export default async function BlogPostDetailPage(
 
           {/* Markdown Rendered Content */}
           <article
-            className="prose prose-invert max-w-none prose-headings:font-bold prose-headings:text-white prose-a:text-red-400 prose-strong:text-slate-100 prose-code:text-red-300 prose-code:bg-slate-900 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 leading-relaxed text-sm sm:text-base text-slate-300"
+            className="blog-content prose prose-invert max-w-none prose-headings:font-bold prose-headings:text-white prose-a:text-red-400 prose-strong:text-slate-100 prose-code:text-red-300 prose-code:bg-slate-900 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 leading-relaxed text-sm sm:text-base text-slate-300"
             dangerouslySetInnerHTML={{ __html: htmlContent }}
           />
 

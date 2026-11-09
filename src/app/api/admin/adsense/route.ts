@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 
   try {
     const config = getAdSenseConfig();
-    const analytics = getAdSenseAnalytics();
+    const analytics = await getAdSenseAnalytics();
 
     return NextResponse.json({
       success: true,

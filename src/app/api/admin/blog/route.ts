@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server';
-import { createBlogPost, updateBlogPost } from '@/lib/blogService';
+import { createBlogPost, updateBlogPost, getAllPostsAdmin } from '@/lib/blogService';
 
 function verifyAdmin(request: Request): boolean {
   const secretHeader = request.headers.get('x-admin-secret');
   const envSecret = process.env.ADMIN_SECRET_KEY || 'Allah@726';
   return secretHeader === envSecret;
+}
+
+export async function GET(request: Request) {
+  if (!verifyAdmin(request)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized admin access' }, { status: 401 });
+  }
+
+  try {
+    const posts = await getAllPostsAdmin();
+    return NextResponse.json({ success: true, posts });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message || 'Failed to fetch admin posts' }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {

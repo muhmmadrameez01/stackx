@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import Link from 'next/link';
 import { FileText, ShieldCheck, Heart } from 'lucide-react';
 import { Logo } from './Logo';
 import type { ToolId } from '../types';
@@ -83,15 +84,15 @@ export const Footer: React.FC<FooterProps> = ({
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
-          <p className="flex items-center gap-1">
-            Built with <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500 inline" /> for complete digital productivity. © 2026 Stackx.
+        <div className="pt-8 flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
+          <p className="flex items-center gap-1 text-slate-400">
+            Built with <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500 inline" /> for complete digital productivity. © 2026 Stackx. All rights reserved.
           </p>
-          <div className="flex items-center gap-6 text-slate-400">
-            <a href="/blog" className="hover:text-red-400 transition-colors">Blog & Guides</a>
-            <a href="/admin/blog" className="hover:text-red-400 transition-colors">CMS Admin</a>
-            <span className="hover:text-white cursor-pointer transition-colors">Privacy Policy</span>
-            <span className="hover:text-white cursor-pointer transition-colors">Client-Side Security</span>
+          <div className="flex flex-wrap items-center gap-6 text-slate-400">
+            <Link href="/blog" className="hover:text-red-400 transition-colors">Blog & Guides</Link>
+            <Link href="/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
+            <Link href="/terms-and-conditions" className="hover:text-white transition-colors">Terms & Conditions</Link>
+            <Link href="/disclaimer" className="hover:text-white transition-colors">Disclaimer</Link>
           </div>
         </div>
 
