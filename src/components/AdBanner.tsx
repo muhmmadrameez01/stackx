@@ -85,7 +85,8 @@ export const AdBanner: React.FC<AdBannerProps> = ({ placement, className = '' })
   }
 
   const slotId = config?.slots?.[placement] || '';
-  const publisherId = config?.publisherId || 'ca-pub-XXXXXXXXXXXXXXXX';
+  const rawPublisherId = config?.publisherId || 'ca-pub-2275978117553909';
+  const publisherId = rawPublisherId.startsWith('ca-') ? rawPublisherId : `ca-${rawPublisherId}`;
 
   // Placement Labels and Dimensions
   const placementMeta = {

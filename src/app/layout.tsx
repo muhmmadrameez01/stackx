@@ -16,7 +16,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const adConfig = getAdSenseConfig();
-  const shouldLoadAdSense = adConfig.enabled && adConfig.publisherId && !adConfig.testMode;
+  const rawPubId = adConfig.publisherId || 'ca-pub-2275978117553909';
+  const fullPubId = rawPubId.startsWith('ca-') ? rawPubId : `ca-${rawPubId}`;
+  const shouldLoadAdSense = adConfig.enabled || Boolean(adConfig.publisherId);
 
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
@@ -24,7 +26,7 @@ export default function RootLayout({
         {shouldLoadAdSense && (
           <script
             async
-            src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adConfig.publisherId}`}
+            src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${fullPubId}`}
             crossOrigin="anonymous"
           />
         )}

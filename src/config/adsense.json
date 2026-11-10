@@ -1,8 +1,8 @@
 {
   "enabled": true,
-  "publisherId": "pub-2275978117553909",
+  "publisherId": "ca-pub-2275978117553909",
   "autoAds": true,
-  "testMode": true,
+  "testMode": false,
   "slots": {
     "headerBanner": "",
     "toolResultBanner": "",
