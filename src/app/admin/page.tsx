@@ -356,7 +356,10 @@ export default function CentralAdminDashboard() {
     setPostCover(post.coverImage || '');
     
     // Status & Schedule
-    const currentStatus = (post.status || (post.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled';
+    let currentStatus = (post.status || (post.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled';
+    if (currentStatus === 'scheduled' && post.scheduledAt && new Date(post.scheduledAt) <= new Date()) {
+      currentStatus = 'published';
+    }
     setPostStatus(currentStatus);
     setPostPublished(post.published);
     if (post.scheduledAt) {
@@ -971,7 +974,7 @@ export default function CentralAdminDashboard() {
                           </td>
                           <td className="px-6 py-4 text-slate-400">{post.category?.name || 'General'}</td>
                           <td className="px-6 py-4">
-                            {post.status === 'scheduled' || (post.scheduledAt && new Date(post.scheduledAt) > new Date()) ? (
+                            {post.status === 'scheduled' && post.scheduledAt && new Date(post.scheduledAt) > new Date() ? (
                               <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-purple-400 bg-purple-950/60 px-2.5 py-1 rounded-md border border-purple-800/40">
                                 <Clock className="w-3 h-3 text-purple-400" /> Scheduled
                                 {post.scheduledAt && (
@@ -980,7 +983,7 @@ export default function CentralAdminDashboard() {
                                   </span>
                                 )}
                               </span>
-                            ) : post.status === 'draft' || !post.published ? (
+                            ) : post.status === 'draft' || (!post.published && post.status !== 'published') ? (
                               <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-400 bg-amber-950/60 px-2.5 py-1 rounded-md border border-amber-800/40">
                                 <FileText className="w-3 h-3 text-amber-400" /> Draft
                               </span>
@@ -992,6 +995,14 @@ export default function CentralAdminDashboard() {
                           </td>
                           <td className="px-6 py-4 text-slate-300 font-semibold">{post.views}</td>
                           <td className="px-6 py-4 text-right space-x-2">
+                            <a
+                              href={`/blog/${post.slug}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-cyan-400" /> View
+                            </a>
                             <button
                               onClick={() => handleEditClick(post)}
                               className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg"

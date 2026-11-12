@@ -18,6 +18,9 @@ import {
   Wrench
 } from 'lucide-react';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string }> }
 ): Promise<Metadata> {
@@ -47,7 +50,7 @@ export async function generateMetadata(
       description,
       url,
       type: 'article',
-      publishedTime: post.createdAt,
+      publishedTime: post.scheduledAt || post.createdAt,
       authors: [post.authorName],
       images: post.coverImage ? [{ url: post.coverImage }] : [],
     },
@@ -96,7 +99,7 @@ export default async function BlogPostDetailPage(
         url: 'https://stackx.si/logo.svg',
       },
     },
-    datePublished: post.createdAt,
+    datePublished: post.scheduledAt || post.createdAt,
     dateModified: post.updatedAt,
   };
 
@@ -164,7 +167,7 @@ export default async function BlogPostDetailPage(
               <span className="font-semibold text-slate-200">By {post.authorName}</span>
               <span className="flex items-center gap-1">
                 <Calendar className="w-3.5 h-3.5 text-red-500" />
-                {new Date(post.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                {new Date(post.scheduledAt || post.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
               </span>
               <span className="flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-red-500" /> {post.readingTime} min read

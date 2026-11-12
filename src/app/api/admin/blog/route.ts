@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createBlogPost, updateBlogPost, getAllPostsAdmin } from '@/lib/blogService';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 function verifyAdmin(request: Request): boolean {
   const secretHeader = request.headers.get('x-admin-secret');
   const envSecret = process.env.ADMIN_SECRET_KEY || 'Allah@726';

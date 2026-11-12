@@ -198,13 +198,84 @@ export async function getAllCategories(): Promise<BlogCategoryItem[]> {
   return SAMPLE_CATEGORIES;
 }
 
+/**
+ * Automatically promotes any scheduled posts whose scheduled time has arrived to 'published' status.
+ * Also synchronizes publication timestamp so newly scheduled/published articles appear first.
+ * Self-healing and executed whenever public or admin blog endpoints are queried.
+ */
+export async function syncScheduledPosts(): Promise<number> {
+  const now = new Date();
+  try {
+    // 1. Find scheduled posts whose release time has arrived
+    const scheduledPosts = await db.blogPost.findMany({
+      where: {
+        status: 'scheduled',
+        scheduledAt: { lte: now },
+      },
+    });
+
+    for (const post of scheduledPosts) {
+      await db.blogPost.update({
+        where: { id: post.id },
+        data: {
+          status: 'published',
+          published: true,
+          createdAt: post.scheduledAt || now,
+        },
+      });
+    }
+
+    // 2. Synchronize any previously matured posts so their effective release timestamp is up to date
+    const maturePosts = await db.blogPost.findMany({
+      where: {
+        status: 'published',
+        scheduledAt: { not: null, lte: now },
+      },
+    });
+    for (const mp of maturePosts) {
+      if (mp.scheduledAt && new Date(mp.createdAt).getTime() < new Date(mp.scheduledAt).getTime()) {
+        await db.blogPost.update({
+          where: { id: mp.id },
+          data: {
+            createdAt: mp.scheduledAt,
+          },
+        });
+      }
+    }
+
+    // Also update in-memory fallback posts if any
+    inMemoryPosts.forEach((p: BlogPostItem) => {
+      if (p.status === 'scheduled' && p.scheduledAt && new Date(p.scheduledAt) <= now) {
+        p.status = 'published';
+        p.published = true;
+        p.createdAt = p.scheduledAt;
+      }
+    });
+
+    return scheduledPosts.length;
+  } catch (err) {
+    // Database fallback
+    inMemoryPosts.forEach((p: BlogPostItem) => {
+      if (p.status === 'scheduled' && p.scheduledAt && new Date(p.scheduledAt) <= now) {
+        p.status = 'published';
+        p.published = true;
+        p.createdAt = p.scheduledAt;
+      }
+    });
+    return 0;
+  }
+}
+
 export async function getPublishedPosts(query?: string, categorySlug?: string): Promise<BlogPostItem[]> {
   const now = new Date();
+  await syncScheduledPosts();
+
   try {
     const where: any = {
       OR: [
-        { status: 'published', published: true },
+        { status: 'published' },
         { status: 'scheduled', scheduledAt: { lte: now } },
+        { published: true, status: { not: 'draft' } },
       ],
     };
     if (categorySlug) {
@@ -230,6 +301,20 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
         const q = query.toLowerCase();
         filtered = filtered.filter((p: any) => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
       }
+
+      // Ensure the latest published article ALWAYS appears first (top position)
+      filtered.sort((a: any, b: any) => {
+        const timeA = Math.max(
+          a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0,
+          new Date(a.createdAt).getTime()
+        );
+        const timeB = Math.max(
+          b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0,
+          new Date(b.createdAt).getTime()
+        );
+        return timeB - timeA;
+      });
+
       return filtered;
     }
   } catch (err) {
@@ -250,10 +335,26 @@ export async function getPublishedPosts(query?: string, categorySlug?: string): 
     const q = query.toLowerCase();
     posts = posts.filter((p: BlogPostItem) => p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q));
   }
+
+  // Ensure latest published post is first
+  posts.sort((a, b) => {
+    const timeA = Math.max(
+      a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0,
+      new Date(a.createdAt).getTime()
+    );
+    const timeB = Math.max(
+      b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0,
+      new Date(b.createdAt).getTime()
+    );
+    return timeB - timeA;
+  });
+
   return posts;
 }
 
 export async function getAllPostsAdmin(): Promise<BlogPostItem[]> {
+  await syncScheduledPosts();
+
   try {
     const posts = await db.blogPost.findMany({
       include: { category: true },
@@ -261,13 +362,30 @@ export async function getAllPostsAdmin(): Promise<BlogPostItem[]> {
     });
 
     if (posts.length > 0) {
-      return posts.map((p: any) => ({
+      const mapped = posts.map((p: any) => ({
         ...p,
         scheduledAt: p.scheduledAt ? p.scheduledAt.toISOString() : null,
         status: (p.status || (p.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled',
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString(),
       }));
+
+      // In admin CMS, show the most recent work at the very top (by effective release or update date)
+      mapped.sort((a: any, b: any) => {
+        const timeA = Math.max(
+          a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0,
+          new Date(a.updatedAt).getTime(),
+          new Date(a.createdAt).getTime()
+        );
+        const timeB = Math.max(
+          b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0,
+          new Date(b.updatedAt).getTime(),
+          new Date(b.createdAt).getTime()
+        );
+        return timeB - timeA;
+      });
+
+      return mapped;
     }
   } catch (err) {
     // Database fallback
@@ -278,6 +396,8 @@ export async function getAllPostsAdmin(): Promise<BlogPostItem[]> {
 
 export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> {
   const now = new Date();
+  await syncScheduledPosts();
+
   try {
     const post = await db.blogPost.findUnique({
       where: { slug },
@@ -286,9 +406,16 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
 
     if (post) {
       // If draft, do not display publicly
-      if (post.status === 'draft' || !post.published) return null;
+      if (post.status === 'draft') return null;
+
       // If scheduled in the future, do not display publicly yet
-      if (post.status === 'scheduled' && post.scheduledAt && post.scheduledAt > now) return null;
+      if (post.status === 'scheduled') {
+        if (!post.scheduledAt || post.scheduledAt > now) {
+          return null;
+        }
+      } else if (!post.published) {
+        return null;
+      }
 
       // Increment views count async
       db.blogPost.update({
@@ -310,8 +437,14 @@ export async function getPostBySlug(slug: string): Promise<BlogPostItem | null> 
 
   const found = inMemoryPosts.find((p: BlogPostItem) => p.slug === slug);
   if (found) {
-    if (found.status === 'draft' || !found.published) return null;
-    if (found.status === 'scheduled' && found.scheduledAt && new Date(found.scheduledAt) > now) return null;
+    if (found.status === 'draft') return null;
+    if (found.status === 'scheduled') {
+      if (!found.scheduledAt || new Date(found.scheduledAt) > now) {
+        return null;
+      }
+    } else if (!found.published) {
+      return null;
+    }
     found.views += 1;
     return found;
   }
@@ -425,6 +558,19 @@ export async function updateBlogPost(id: string, data: Partial<BlogPostItem>): P
   }
 
   try {
+    const existing = await db.blogPost.findUnique({ where: { id } });
+    if (existing) {
+      // If moving from draft to published, or publishing with reached schedule, update createdAt so it appears first at top
+      if (
+        (existing.status === 'draft' || !existing.published) &&
+        (data.status === 'published' || isPublished)
+      ) {
+        updateData.createdAt = now;
+      } else if (data.scheduledAt && new Date(data.scheduledAt) <= now) {
+        updateData.createdAt = new Date(data.scheduledAt);
+      }
+    }
+
     const updated = await db.blogPost.update({
       where: { id },
       data: updateData,
@@ -441,13 +587,25 @@ export async function updateBlogPost(id: string, data: Partial<BlogPostItem>): P
   } catch (err) {
     const idx = inMemoryPosts.findIndex((p: BlogPostItem) => p.id === id);
     if (idx !== -1) {
+      const prev = inMemoryPosts[idx];
+      let newCreatedAt = prev.createdAt;
+      if (
+        (prev.status === 'draft' || !prev.published) &&
+        (data.status === 'published' || isPublished)
+      ) {
+        newCreatedAt = now.toISOString();
+      } else if (data.scheduledAt && new Date(data.scheduledAt) <= now) {
+        newCreatedAt = new Date(data.scheduledAt).toISOString();
+      }
+
       inMemoryPosts[idx] = { 
         ...inMemoryPosts[idx], 
         ...data, 
         published: isPublished !== undefined ? isPublished : inMemoryPosts[idx].published,
         status: (data.status || inMemoryPosts[idx].status) as 'published' | 'draft' | 'scheduled',
         scheduledAt: data.scheduledAt !== undefined ? data.scheduledAt : inMemoryPosts[idx].scheduledAt,
-        updatedAt: new Date().toISOString() 
+        createdAt: newCreatedAt,
+        updatedAt: now.toISOString() 
       };
       return inMemoryPosts[idx];
     }

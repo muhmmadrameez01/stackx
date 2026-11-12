@@ -4,7 +4,10 @@ import type { Metadata } from 'next';
 import { getPublishedPosts, getAllCategories } from '@/lib/blogService';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
-import { Sparkles, Clock, Eye, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Sparkles, Clock, Eye, ArrowRight, ArrowLeft, Calendar } from 'lucide-react';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function generateMetadata(
   { params }: { params: Promise<{ slug: string }> }
@@ -81,9 +84,15 @@ export default async function CategoryBlogPage(
                   </div>
 
                   <div className="px-6 pb-6 pt-2 flex items-center justify-between text-[11px] text-slate-500 border-t border-slate-800/60 mt-4">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-red-500" /> {post.readingTime} min read
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-1 text-slate-400">
+                        <Calendar className="w-3 h-3 text-red-500" />
+                        {new Date(post.scheduledAt || post.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" /> {post.readingTime} min read
+                      </span>
+                    </div>
                     <Link
                       href={`/blog/${post.slug}`}
                       className="font-bold text-slate-300 group-hover:text-red-400 flex items-center gap-1"

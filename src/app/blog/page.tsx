@@ -6,6 +6,9 @@ import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Sparkles, Calendar, Clock, Eye, ArrowRight, Tag, Search, BookOpen } from 'lucide-react';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: 'Blog & Tutorials | Stackx - Master Digital Productivity',
   description: 'Expert guides, tutorials, and insights on PDF editing, image conversion, Web security, and online tools privacy.',
@@ -67,7 +70,7 @@ export default async function BlogIndexPage() {
         {featuredPost && (
           <section className="mb-14">
             <h2 className="text-xs font-bold uppercase tracking-wider text-red-500 mb-4 flex items-center gap-1.5">
-              <BookOpen className="w-4 h-4" /> Featured Spotlight
+              <BookOpen className="w-4 h-4" /> {featuredPost.featured ? 'Featured Spotlight' : 'Latest Article'}
             </h2>
             <div className="group relative rounded-3xl bg-slate-900/90 border border-slate-800 overflow-hidden hover:border-red-500/50 transition-all duration-300 grid grid-cols-1 lg:grid-cols-12 shadow-2xl">
               {featuredPost.coverImage && (
@@ -98,7 +101,11 @@ export default async function BlogIndexPage() {
                 </div>
 
                 <div className="mt-6 pt-6 border-t border-slate-800 flex items-center justify-between text-xs text-slate-500">
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+                    <span className="flex items-center gap-1 text-slate-300 font-medium">
+                      <Calendar className="w-3.5 h-3.5 text-red-500" />
+                      {new Date(featuredPost.scheduledAt || featuredPost.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
                     <span className="flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5 text-red-500" /> {featuredPost.readingTime} min read
                     </span>
@@ -122,7 +129,7 @@ export default async function BlogIndexPage() {
         {/* Regular Articles Grid */}
         <section>
           <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-6">
-            Latest Guides & Articles
+            All Guides & Articles
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {regularPosts.map(post => (
@@ -158,9 +165,15 @@ export default async function BlogIndexPage() {
                 </div>
 
                 <div className="px-6 pb-6 pt-2 flex items-center justify-between text-[11px] text-slate-500 border-t border-slate-800/60 mt-4">
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-red-500" /> {post.readingTime} min read
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="flex items-center gap-1 text-slate-400">
+                      <Calendar className="w-3 h-3 text-red-500" />
+                      {new Date(post.scheduledAt || post.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" /> {post.readingTime} min read
+                    </span>
+                  </div>
                   <Link
                     href={`/blog/${post.slug}`}
                     className="font-bold text-slate-300 group-hover:text-red-400 flex items-center gap-1 transition-colors"

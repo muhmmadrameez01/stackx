@@ -126,7 +126,10 @@ function EditorForm() {
               setSummary(found.summary || '');
               setContent(found.content || '');
               setCoverImage(found.coverImage || '');
-              const currentStatus = (found.status || (found.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled';
+              let currentStatus = (found.status || (found.published ? 'published' : 'draft')) as 'published' | 'draft' | 'scheduled';
+              if (currentStatus === 'scheduled' && found.scheduledAt && new Date(found.scheduledAt) <= new Date()) {
+                currentStatus = 'published';
+              }
               setPostStatus(currentStatus);
               setPublished(found.published);
               if (found.scheduledAt) {
